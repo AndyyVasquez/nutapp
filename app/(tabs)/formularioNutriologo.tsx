@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import BottomNavbar from './navbar';
 
-const SERVER_API_URL = 'http://10.13.9.202:3001'; 
+const SERVER_API_URL = 'https://integradora1.com/'; 
 
 interface User {
   id: string;

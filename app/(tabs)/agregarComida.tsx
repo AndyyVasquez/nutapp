@@ -1,4 +1,4 @@
-// screens/AgregarComidaScreen.js - Versión corregida con KeyboardAvoidingView y filtro NOVA
+// screens/AgregarComidaScreen.js - Versión integrada con BD y IoT báscula
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
@@ -22,7 +22,7 @@ import {
 import useFoodAPI from './hooks/useFoodApi';
 
 // Configuración del servidor
-const SERVER_API_URL = 'http://10.13.3.211:3001';
+const SERVER_API_URL = 'https://integradora1.com/'; 
 
 interface User {
   id: string;
@@ -62,6 +62,9 @@ const AgregarComidaScreen = () => {
   const [selectedFood, setSelectedFood] = useState<Food | null>(null);
   const [portionModalVisible, setPortionModalVisible] = useState(false);
   const [portion, setPortion] = useState('100');
+  const [isScaleConnected, setIsScaleConnected] = useState(false);
+  const [scaleWeight, setScaleWeight] = useState<number | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Hook personalizado para la API de alimentos
   const { loading, error, searchFoods, getPopularCategories, testAPI } = useFoodAPI();
@@ -69,6 +72,7 @@ const AgregarComidaScreen = () => {
   // Verificar autenticación al cargar
   useEffect(() => {
     checkAuthentication();
+    checkScaleConnection();
   }, []);
 
   const checkAuthentication = async () => {
@@ -102,6 +106,153 @@ const AgregarComidaScreen = () => {
     }
   };
 
+  // Verificar conexión con la báscula IoT
+  const checkScaleConnection = async () => {
+    try {
+      const response = await fetch(`${SERVER_API_URL}/api/iot/scale/status`);
+      const data = await response.json();
+      setIsScaleConnected(data.connected);
+      console.log('📟 Estado báscula:', data.connected ? 'Conectada' : 'Desconectada');
+    } catch (error) {
+      console.error('❌ Error verificando báscula:', error);
+      setIsScaleConnected(false);
+    }
+  };
+
+  // Obtener peso de la báscula
+  const getScaleWeight = async () => {
+    try {
+      const response = await fetch(`${SERVER_API_URL}/api/iot/scale/weight`);
+      const data = await response.json();
+      
+      if (data.success) {
+        setScaleWeight(data.weight);
+        setPortion(data.weight.toString());
+        return data.weight;
+      } else {
+        throw new Error(data.message || 'Error obteniendo peso');
+      }
+    } catch (error) {
+      console.error('❌ Error obteniendo peso:', error);
+      Alert.alert('Error', 'No se pudo obtener el peso de la báscula');
+      return null;
+    }
+  };
+
+  // Enviar datos a la báscula IoT
+  const sendToScale = async (foodData: any) => {
+    try {
+      const scalePayload = {
+        id_cli: user?.id,
+        nombre_alimento: foodData.name,
+        grupo_alimenticio: selectedCategory?.name || 'General',
+        gramos_recomendados: parseFloat(portion),
+        calorias_estimadas: foodData.adjustedFood.calories,
+        fecha: new Date().toISOString().split('T')[0],
+        hora: new Date().toTimeString().split(' ')[0]
+      };
+
+      const response = await fetch(`${SERVER_API_URL}/api/iot/scale/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(scalePayload)
+      });
+
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.message || 'Error enviando datos a báscula');
+      }
+
+      console.log('✅ Datos enviados a báscula exitosamente');
+      return result;
+    } catch (error) {
+      console.error('❌ Error enviando a báscula:', error);
+      throw error;
+    }
+  };
+
+  // Guardar en base de datos relacional (MariaDB)
+  const saveToRelationalDB = async (foodData: any) => {
+    try {
+      const payload = {
+        id_cli: user?.id,
+        fecha: new Date().toISOString().split('T')[0],
+        hora: new Date().toTimeString().split(' ')[0],
+        calorias_totales: foodData.adjustedFood.calories,
+        grupo_alimenticio: selectedCategory?.name || 'General',
+        mensaje_validacion: `${foodData.name} - ${portion}g registrado exitosamente`
+      };
+
+      const response = await fetch(`${SERVER_API_URL}/api/comidas`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.message || 'Error guardando en base de datos');
+      }
+
+      console.log('✅ Guardado en BD relacional exitoso, ID:', result.id_comida);
+      return result.id_comida;
+    } catch (error) {
+      console.error('❌ Error guardando en BD relacional:', error);
+      throw error;
+    }
+  };
+
+  // Guardar en base de datos no relacional (MongoDB)
+  const saveToNoRelationalDB = async (foodData: any, idComida: number, pesoReal?: number) => {
+    try {
+      const payload = {
+        id_cli: user?.id,
+        id_comida: idComida,
+        nombre_alimento: foodData.name,
+        grupo_alimenticio: selectedCategory?.name || 'General',
+        gramos_pesados: pesoReal || parseFloat(portion),
+        gramos_recomendados: parseFloat(portion),
+        calorias_estimadas: foodData.adjustedFood.calories,
+        fecha: new Date().toISOString().split('T')[0],
+        hora: new Date().toTimeString().split(' ')[0],
+        informacion_nutricional: {
+          proteinas: foodData.adjustedFood.protein,
+          carbohidratos: foodData.adjustedFood.carbs,
+          grasas: foodData.adjustedFood.fat,
+          fibra: foodData.adjustedFood.fiber,
+          nutriscore: foodData.nutriscore,
+          novaGroup: foodData.novaGroup
+        }
+      };
+
+      const response = await fetch(`${SERVER_API_URL}/api/comidas/mongo`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.message || 'Error guardando en MongoDB');
+      }
+
+      console.log('✅ Guardado en MongoDB exitoso, ID:', result.mongoId);
+      return result.mongoId;
+    } catch (error) {
+      console.error('❌ Error guardando en MongoDB:', error);
+      throw error;
+    }
+  };
+
   // Función de test para diagnosticar la API
   const runAPITest = async () => {
     console.log('🧪 Ejecutando test de API...');
@@ -129,21 +280,18 @@ const AgregarComidaScreen = () => {
 
     try {
       const options = {
-        pageSize: 50, // Aumentamos para tener más productos antes de filtrar
+        pageSize: 50,
         category: category?.searchTerms.join(' OR ')
       };
 
       const result = await searchFoods(query, options);
 
       if (result.success) {
-        // Aplicar filtro NOVA aquí - priorizamos alimentos menos procesados
         const filteredProducts = result.products
           .filter((product: any) => {
-            // Priorizar productos con NOVA group 1 (sin procesar) y 2 (poco procesados)
             return product.novaGroup === 1 || product.novaGroup === 2 || !product.novaGroup;
           })
           .sort((a: any, b: any) => {
-            // Ordenar por NOVA group: primero los menos procesados
             const novaA = a.novaGroup || 5;
             const novaB = b.novaGroup || 5;
             
@@ -151,10 +299,9 @@ const AgregarComidaScreen = () => {
               return novaA - novaB;
             }
             
-            // Si tienen el mismo NOVA group, ordenar por nombre
             return a.name.localeCompare(b.name);
           })
-          .slice(0, 20); // Limitar a 20 resultados finales
+          .slice(0, 20);
 
         console.log('🔍 Productos filtrados por NOVA:', {
           original: result.products.length,
@@ -190,7 +337,6 @@ const AgregarComidaScreen = () => {
     setSearchQuery('');
     setSearchResults([]);
     
-    // Buscar automáticamente con términos de la categoría
     const categorySearch = category.searchTerms[0];
     setSearchQuery(categorySearch);
     handleSearchFoods(categorySearch, category);
@@ -200,6 +346,7 @@ const AgregarComidaScreen = () => {
   const selectFood = (food: Food) => {
     setSelectedFood(food);
     setPortion('100');
+    setScaleWeight(null);
     
     const novaInfo = food.novaGroup 
       ? `\n🏷️ Procesamiento: ${getNovaDescription(food.novaGroup)}`
@@ -235,26 +382,57 @@ const AgregarComidaScreen = () => {
   // Obtener color del grupo NOVA
   const getNovaColor = (novaGroup?: number) => {
     const colors = {
-      1: '#4CAF50', // Verde - sin procesar
-      2: '#8BC34A', // Verde claro - poco procesado
-      3: '#FF9800', // Naranja - procesado
-      4: '#F44336'  // Rojo - ultra-procesado
+      1: '#4CAF50',
+      2: '#8BC34A',
+      3: '#FF9800',
+      4: '#F44336'
     };
     return colors[novaGroup as keyof typeof colors] || '#9E9E9E';
   };
 
-  // Agregar al diario con porción personalizada
-  const addToFoodDiary = async () => {
+  // Usar báscula para obtener peso
+  const useScaleWeight = async () => {
+    if (!isScaleConnected) {
+      Alert.alert('Error', 'La báscula no está conectada');
+      return;
+    }
+
     try {
+      const weight = await getScaleWeight();
+      if (weight) {
+        Alert.alert(
+          'Peso obtenido',
+          `La báscula indica: ${weight}g\n¿Deseas usar este peso?`,
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { 
+              text: 'Usar peso', 
+              onPress: () => {
+                setPortion(weight.toString());
+                setScaleWeight(weight);
+              }
+            }
+          ]
+        );
+      }
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo obtener el peso de la báscula');
+    }
+  };
+
+  // Agregar al diario con guardado completo
+  const addToFoodDiary = async () => {
+    if (isSaving) return;
+    
+    try {
+      setIsSaving(true);
+      
       const portionNum = parseFloat(portion);
       if (isNaN(portionNum) || portionNum <= 0) {
         Alert.alert('Error', 'Ingresa una porción válida');
         return;
       }
 
-      const currentDiary = await AsyncStorage.getItem('foodDiary');
-      const diary = currentDiary ? JSON.parse(currentDiary) : [];
-      
       if (!selectedFood) {
         Alert.alert('Error', 'No hay alimento seleccionado');
         return;
@@ -268,6 +446,15 @@ const AgregarComidaScreen = () => {
         fat: Math.round(selectedFood.fat * portionNum / 100 * 10) / 10,
         fiber: Math.round(selectedFood.fiber * portionNum / 100 * 10) / 10
       };
+
+      const foodData = {
+        ...selectedFood,
+        adjustedFood: adjustedFood
+      };
+
+      // Paso 1: Guardar en localStorage (backup local)
+      const currentDiary = await AsyncStorage.getItem('foodDiary');
+      const diary = currentDiary ? JSON.parse(currentDiary) : [];
       
       const newEntry = {
         id: Date.now(),
@@ -281,15 +468,35 @@ const AgregarComidaScreen = () => {
       
       diary.push(newEntry);
       await AsyncStorage.setItem('foodDiary', JSON.stringify(diary));
-      
+
+      // Paso 2: Enviar a báscula IoT (si está conectada)
+      if (isScaleConnected) {
+        try {
+          await sendToScale(foodData);
+          console.log('✅ Datos enviados a báscula IoT');
+        } catch (error) {
+          console.warn('⚠️ Error enviando a báscula, continuando sin IoT');
+        }
+      }
+
+      // Paso 3: Guardar en base de datos relacional
+      const idComida = await saveToRelationalDB(foodData);
+      console.log('✅ Guardado en BD relacional con ID:', idComida);
+
+      // Paso 4: Guardar en MongoDB
+      const mongoId = await saveToNoRelationalDB(foodData, idComida, scaleWeight !== null ? scaleWeight : undefined);
+      console.log('✅ Guardado en MongoDB con ID:', mongoId);
+
+      // Mostrar confirmación de éxito
       Alert.alert(
-        '¡Agregado!', 
-        `${selectedFood.name} (${portionNum}g) se agregó a tu diario\n🔥 ${adjustedFood.calories} kcal`,
+        '¡Registrado exitosamente!', 
+        `${selectedFood.name} (${portionNum}g) se registró completamente:\n\n🔥 ${adjustedFood.calories} kcal\n📊 Guardado en bases de datos\n${isScaleConnected ? '📟 Enviado a báscula IoT' : ''}`,
         [
           {
             text: 'Agregar otro',
             onPress: () => {
               setPortionModalVisible(false);
+              setScaleWeight(null);
             }
           },
           {
@@ -297,14 +504,21 @@ const AgregarComidaScreen = () => {
             onPress: () => {
               setPortionModalVisible(false);
               setSearchModalVisible(false);
+              setScaleWeight(null);
             }
           }
         ]
       );
+
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('Error guardando en diario:', errorMessage);
-      Alert.alert('Error', `No se pudo guardar en el diario.\n${errorMessage}`);
+      console.error('❌ Error en proceso completo:', errorMessage);
+      Alert.alert(
+        'Error al registrar', 
+        `Ocurrió un error durante el registro:\n${errorMessage}\n\nLos datos se guardaron localmente como respaldo.`
+      );
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -371,7 +585,6 @@ const AgregarComidaScreen = () => {
     );
   }
 
-  // Si no hay usuario después del loading, no mostrar nada 
   if (!user) {
     return null;
   }
@@ -386,8 +599,12 @@ const AgregarComidaScreen = () => {
           <Text style={styles.backButton}>← Volver</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Agregar Comida</Text>
+        <View style={styles.scaleStatus}>
+          <Text style={[styles.scaleIndicator, { color: isScaleConnected ? '#4CAF50' : '#F44336' }]}>
+            📟 {isScaleConnected ? 'Conectada' : 'Desconectada'}
+          </Text>
+        </View>
       </View>
-
 
       {/* Categories */}
       <KeyboardAvoidingView 
@@ -521,13 +738,28 @@ const AgregarComidaScreen = () => {
 
             <View style={styles.portionInputContainer}>
               <Text style={styles.portionLabel}>Cantidad (gramos):</Text>
-              <TextInput
-                style={styles.portionInput}
-                value={portion}
-                onChangeText={setPortion}
-                keyboardType="numeric"
-                placeholder="100"
-              />
+              <View style={styles.portionInputRow}>
+                <TextInput
+                  style={styles.portionInput}
+                  value={portion}
+                  onChangeText={setPortion}
+                  keyboardType="numeric"
+                  placeholder="100"
+                />
+                {isScaleConnected && (
+                  <TouchableOpacity
+                    style={styles.scaleButton}
+                    onPress={useScaleWeight}
+                  >
+                    <Text style={styles.scaleButtonText}>📟 Usar Báscula</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              {scaleWeight && (
+                <Text style={styles.scaleWeightText}>
+                  ⚖️ Peso de báscula: {scaleWeight}g
+                </Text>
+              )}
             </View>
 
             {selectedFood && portion && !isNaN(parseFloat(portion)) && (
@@ -552,15 +784,21 @@ const AgregarComidaScreen = () => {
               <TouchableOpacity
                 style={[styles.portionModalButton, styles.cancelButton]}
                 onPress={() => setPortionModalVisible(false)}
+                disabled={isSaving}
               >
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
               </TouchableOpacity>
               
               <TouchableOpacity
-                style={[styles.portionModalButton, styles.addButton]}
+                style={[styles.portionModalButton, styles.addButton, isSaving && styles.disabledButton]}
                 onPress={addToFoodDiary}
+                disabled={isSaving}
               >
-                <Text style={styles.addButtonText}>Agregar</Text>
+                {isSaving ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <Text style={styles.addButtonText}>Registrar</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -602,21 +840,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#F5F5DC',
   },
-  userInfo: {
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  scaleStatus: {
+    alignItems: 'center',
   },
-  userWelcome: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#F5F5DC',
-    marginBottom: 5,
-  },
-  userDetails: {
-    fontSize: 14,
-    color: '#F5F5DC',
-    opacity: 0.8,
+  scaleIndicator: {
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   content: {
     flex: 1,
@@ -876,13 +1105,37 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 8,
   },
+  portionInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   portionInput: {
+    flex: 1,
     borderWidth: 2,
     borderColor: '#7A9B57',
     borderRadius: 8,
     paddingHorizontal: 15,
     paddingVertical: 12,
     fontSize: 18,
+    textAlign: 'center',
+  },
+  scaleButton: {
+    backgroundColor: '#4CAF50',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  scaleButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  scaleWeightText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#4CAF50',
+    fontWeight: 'bold',
     textAlign: 'center',
   },
   nutritionPreview: {
@@ -928,6 +1181,9 @@ const styles = StyleSheet.create({
   addButtonText: {
     color: 'white',
     fontWeight: 'bold',
+  },
+  disabledButton: {
+    backgroundColor: '#ccc',
   },
 });
 

@@ -17,9 +17,9 @@ import {
   View
 } from 'react-native';
 
-const API_URL = __DEV__ && Platform.OS === 'web' 
-  ? 'http://localhost:3001'           
-  : 'http://10.13.9.202:3001';      //ipconfig
+
+const API_URL = 'https://integradora1.com';
+    //ipconfig
 
 
 const LoginScreen = () => {

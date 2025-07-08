@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 
-const SERVER_API_URL = 'http://10.13.9.202:3001';
+const SERVER_API_URL = 'http://192.168.1.73:3001'; // Cambia por tu IP
 
 type User = {
   id: string;
@@ -27,24 +27,25 @@ type User = {
 const PayPalPaymentScreen = () => {
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [currentOrderId, setCurrentOrderId] = useState<string | null>(null);
 
   useEffect(() => {
     loadUserData();
+    checkPendingOrder();
     
     // Configurar listener para deep links
     const handleDeepLink = async (url: string) => {
       console.log('🔗 Deep link recibido:', url);
       
-      if (url.includes('success') || url.includes('approved')) {
-        console.log('✅ Usuario regresó de PayPal - procesando pago...');
-        // Pequeño delay para asegurar que PayPal completó el proceso
+      if (url.includes('payment-success') || url.includes('approved')) {
+        console.log('✅ Usuario regresó de PayPal exitosamente');
+        // Procesar el pago después de un pequeño delay
         setTimeout(() => {
-          router.push('./paymentSuccess');
+          processPaymentSuccess();
         }, 1000);
-      } else if (url.includes('cancel')) {
+      } else if (url.includes('payment-cancel') || url.includes('cancel')) {
         console.log('❌ Usuario canceló el pago');
-        Alert.alert('Pago Cancelado', 'El pago fue cancelado por el usuario.');
-        setLoading(false);
+        handlePaymentCancelled();
       }
     };
 
@@ -67,11 +68,110 @@ const PayPalPaymentScreen = () => {
     try {
       const userData = await AsyncStorage.getItem('user');
       if (userData) {
-        setUser(JSON.parse(userData));
+        const parsedUser = JSON.parse(userData);
+        setUser(parsedUser);
+        console.log('👤 Usuario cargado:', parsedUser.nombre);
       }
     } catch (error) {
       console.error('Error cargando datos del usuario:', error);
     }
+  };
+
+  const checkPendingOrder = async () => {
+    try {
+      const savedOrderId = await AsyncStorage.getItem('currentOrderId');
+      if (savedOrderId) {
+        setCurrentOrderId(savedOrderId);
+        console.log('📋 Orden pendiente encontrada:', savedOrderId);
+      }
+    } catch (error) {
+      console.error('Error verificando orden pendiente:', error);
+    }
+  };
+
+  const processPaymentSuccess = async () => {
+    try {
+      setLoading(true);
+      
+      const orderId = currentOrderId || (await AsyncStorage.getItem('currentOrderId'));
+      if (!orderId) {
+        Alert.alert('Error', 'No se encontró una orden pendiente');
+        return;
+      }
+
+      console.log('💰 Procesando pago exitoso para orden:', orderId);
+
+      // Capturar el pago
+      const response = await fetch(`${SERVER_API_URL}/api/paypal/capture-order`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderId }),
+      });
+
+      const data = await response.json();
+      console.log('📄 Respuesta de captura:', data);
+
+      if (data.success) {
+        // Guardar el token de acceso
+        await AsyncStorage.setItem('accessToken', data.data.accessToken);
+        await AsyncStorage.setItem('tokenExpires', data.data.tokenExpires);
+        
+        // Actualizar datos del usuario
+        if (user) {
+          const updatedUser = { ...user, tiene_acceso: true, token_acceso: data.data.accessToken };
+          await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
+        }
+
+        // Limpiar orden pendiente
+        await AsyncStorage.removeItem('currentOrderId');
+        setCurrentOrderId(null);
+
+        console.log('✅ Pago procesado exitosamente');
+        console.log('🎫 Token autorizado:', data.data.accessToken);
+
+        // Navegar a pantalla de éxito
+        router.replace({
+          pathname: './paymentSuccess',
+          params: {
+            token: data.data.accessToken,
+            message: 'Token autorizado'
+          }
+        });
+
+      } else {
+        throw new Error(data.message || 'Error procesando el pago');
+      }
+
+    } catch (error) {
+      console.error('❌ Error procesando pago:', error);
+      Alert.alert(
+        'Error procesando pago',
+        error instanceof Error ? error.message : String(error),
+        [
+          {
+            text: 'Reintentar',
+            onPress: () => processPaymentSuccess()
+          },
+          {
+            text: 'Cancelar',
+            style: 'cancel'
+          }
+        ]
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePaymentCancelled = () => {
+    setLoading(false);
+    Alert.alert(
+      'Pago Cancelado',
+      'El pago fue cancelado. Puedes intentar nuevamente.',
+      [{ text: 'OK' }]
+    );
   };
 
   const handlePayPalPayment = async () => {
@@ -83,43 +183,36 @@ const PayPalPaymentScreen = () => {
         return;
       }
 
-      console.log('💳 Iniciando pago PayPal...');
+      console.log('💳 Iniciando pago PayPal para usuario:', user.nombre);
 
-      // Verificar conectividad del servidor primero
+      // Verificar conectividad del servidor
       try {
         console.log('🔍 Verificando servidor...');
-        const healthCheck = await fetch(`${SERVER_API_URL}/health`, {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        const healthResponse = await fetch(`${SERVER_API_URL}/health`, {
           method: 'GET',
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
         
-        if (!healthCheck.ok) {
-          throw new Error(`Servidor respondió con estado: ${healthCheck.status}`);
+        if (!healthResponse.ok) {
+          throw new Error(`Servidor no disponible (${healthResponse.status})`);
         }
-        console.log('✅ Servidor disponible');
+        
+        const healthData = await healthResponse.json();
+        console.log('✅ Servidor disponible:', healthData.status);
+        
+        if (!healthData.paypal?.configured) {
+          throw new Error('PayPal no está configurado en el servidor');
+        }
+        
       } catch (healthError) {
         console.error('❌ Error de conectividad:', healthError);
         Alert.alert(
           'Error de Conexión',
-          'No se puede conectar al servidor. Verifica que esté ejecutándose en ' + SERVER_API_URL
-        );
-        return;
-      }
-
-      // Probar configuración de PayPal
-      try {
-        console.log('🔍 Verificando PayPal...');
-        const debugResponse = await fetch(`${SERVER_API_URL}/api/paypal/debug`);
-        const debugData = await debugResponse.json();
-        
-        if (!debugData.success) {
-          throw new Error(debugData.message);
-        }
-        console.log('✅ PayPal configurado correctamente');
-      } catch (paypalError) {
-        console.error('❌ Error de PayPal:', paypalError);
-        Alert.alert(
-          'Error de Configuración',
-          'PayPal no está configurado correctamente en el servidor: ' + ((paypalError instanceof Error) ? paypalError.message : String(paypalError))
+          'No se puede conectar al servidor. Verifica que esté ejecutándose.'
         );
         return;
       }
@@ -139,21 +232,10 @@ const PayPalPaymentScreen = () => {
         })
       });
 
-      console.log('📊 Status de respuesta:', response.status);
-      console.log('📄 Content-Type:', response.headers.get('content-type'));
-
       if (!response.ok) {
         const errorText = await response.text();
         console.error('❌ Error del servidor:', errorText);
-        throw new Error(`Error del servidor (${response.status}): ${errorText.substring(0, 100)}`);
-      }
-
-      // Verificar que la respuesta sea JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType?.includes('application/json')) {
-        const htmlContent = await response.text();
-        console.error('❌ Respuesta no es JSON:', htmlContent.substring(0, 200));
-        throw new Error('El servidor devolvió HTML en lugar de JSON');
+        throw new Error(`Error del servidor: ${response.status}`);
       }
 
       const data = await response.json();
@@ -162,16 +244,21 @@ const PayPalPaymentScreen = () => {
       if (data.success) {
         console.log('✅ Orden creada:', data.orderId);
         
-        // Guardar ID de orden para capturar después
+        // Guardar ID de orden
         await AsyncStorage.setItem('currentOrderId', data.orderId);
+        setCurrentOrderId(data.orderId);
         
         console.log('🌐 Abriendo PayPal:', data.approvalUrl);
 
         Alert.alert(
           'Redirigiendo a PayPal',
-          'Se abrirá PayPal para completar tu pago. Después del pago, regresa a la app.',
+          'Se abrirá PayPal para completar tu pago. Después del pago, automáticamente regresarás a la app.',
           [
-            { text: 'Cancelar', style: 'cancel', onPress: () => setLoading(false) },
+            { 
+              text: 'Cancelar', 
+              style: 'cancel', 
+              onPress: () => setLoading(false) 
+            },
             { 
               text: 'Continuar', 
               onPress: async () => {
@@ -184,8 +271,7 @@ const PayPalPaymentScreen = () => {
                   }
                 } catch (linkError) {
                   console.error('Error abriendo PayPal:', linkError);
-                  const errorMsg = linkError instanceof Error ? linkError.message : String(linkError);
-                  Alert.alert('Error', 'No se pudo abrir PayPal: ' + errorMsg);
+                  Alert.alert('Error', 'No se pudo abrir PayPal');
                   setLoading(false);
                 }
               }
@@ -201,19 +287,8 @@ const PayPalPaymentScreen = () => {
       console.error('❌ Error en pago:', error);
       
       let errorMessage = 'Error desconocido';
-
       if (error instanceof Error) {
-        if (error.message.includes('Network request failed')) {
-          errorMessage = 'Error de red. Verifica tu conexión a internet.';
-        } else if (error.message.includes('JSON')) {
-          errorMessage = 'Error de comunicación con el servidor.';
-        } else if (error.message.includes('fetch')) {
-          errorMessage = 'No se pudo conectar al servidor.';
-        } else {
-          errorMessage = error.message;
-        }
-      } else {
-        errorMessage = String(error);
+        errorMessage = error.message;
       }
       
       Alert.alert('Error', errorMessage);
@@ -223,29 +298,22 @@ const PayPalPaymentScreen = () => {
   };
 
   const checkPaymentStatus = async () => {
-    try {
-      const orderId = await AsyncStorage.getItem('currentOrderId');
-      if (!orderId) {
-        Alert.alert('Error', 'No hay orden pendiente');
-        return;
-      }
-
-      Alert.alert(
-        '¿Completaste el pago?',
-        'Si ya pagaste en PayPal, presiona "Sí" para verificar.',
-        [
-          { text: 'No', style: 'cancel' },
-          { 
-            text: 'Sí', 
-            onPress: () => {
-              router.push('./paymentSuccess');
-            }
-          }
-        ]
-      );
-    } catch (error) {
-      console.error('Error:', error);
+    if (!currentOrderId) {
+      Alert.alert('Error', 'No hay orden pendiente');
+      return;
     }
+
+    Alert.alert(
+      '¿Completaste el pago?',
+      'Si ya pagaste en PayPal, presiona "Sí" para verificar.',
+      [
+        { text: 'No', style: 'cancel' },
+        { 
+          text: 'Sí', 
+          onPress: () => processPaymentSuccess()
+        }
+      ]
+    );
   };
 
   const goBack = () => {
@@ -311,13 +379,14 @@ const PayPalPaymentScreen = () => {
             )}
           </TouchableOpacity>
 
-          {/* Botón adicional para verificar pago manualmente */}
-          <TouchableOpacity 
-            style={styles.checkButton}
-            onPress={checkPaymentStatus}
-          >
-            <Text style={styles.checkButtonText}>Ya pagué - Verificar</Text>
-          </TouchableOpacity>
+          {currentOrderId && (
+            <TouchableOpacity 
+              style={styles.checkButton}
+              onPress={checkPaymentStatus}
+            >
+              <Text style={styles.checkButtonText}>Ya pagué - Verificar</Text>
+            </TouchableOpacity>
+          )}
 
           <Text style={styles.securityText}>
             🔒 Pago seguro procesado por PayPal

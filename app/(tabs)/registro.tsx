@@ -126,7 +126,7 @@ const RegistroScreen = () => {
         modo: 'autonomo'
       };
 
-      const response = await fetch('http://10.13.9.202:3001/api/register-client', {
+      const response = await fetch('https://integradora1.com/api/register-client', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -143,7 +143,7 @@ const RegistroScreen = () => {
           [
             {
               text: 'OK',
-              onPress: () => router.push('./')
+              onPress: () => router.push('./login')
             }
           ]
         );

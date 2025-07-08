@@ -14,7 +14,7 @@ import Icon from 'react-native-vector-icons/FontAwesome6';
 import Icon3 from 'react-native-vector-icons/Ionicons';
 
 // Configuración del servidor
-const SERVER_API_URL = 'http://10.13.9.202:3001';
+const SERVER_API_URL = 'https://integradora1.com/'; 
 
 const BottomNavbar = ({ activeTab = '' }) => {
   const [menuVisible, setMenuVisible] = useState(false);
@@ -45,7 +45,7 @@ const handleLogout = async () => {
     console.log('✅ Datos locales limpiados');
     
     // ✅ Redirigir al login
-    router.push('./'); // o router.push('/login')
+    router.push('./login'); // o router.push('/login')
     
     Alert.alert('Éxito', 'Sesión cerrada correctamente');
     
