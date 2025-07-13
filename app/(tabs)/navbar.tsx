@@ -14,7 +14,7 @@ import Icon from 'react-native-vector-icons/FontAwesome6';
 import Icon3 from 'react-native-vector-icons/Ionicons';
 
 // Configuración del servidor
-const SERVER_API_URL = 'https://integradora1.com/'; 
+const SERVER_API_URL = 'http://10.13.8.70:3001';
 
 const BottomNavbar = ({ activeTab = '' }) => {
   const [menuVisible, setMenuVisible] = useState(false);
@@ -71,10 +71,9 @@ const handleLogout = async () => {
     router.push('./solicitarNutriologo');
   };
 
-  const handlePasos = () => {
-    router.push('./registroPasos');
-  };
-
+const handlePasos = () => {
+  router.push('./registroPasos');
+};
   const handleProfileMenu = () => {
     setMenuVisible(true);
   };

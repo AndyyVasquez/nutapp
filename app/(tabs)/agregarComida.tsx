@@ -22,7 +22,7 @@ import {
 import useFoodAPI from './hooks/useFoodApi';
 
 // Configuración del servidor
-const SERVER_API_URL = 'https://integradora1.com/'; 
+const SERVER_API_URL = 'http://10.13.8.70:3001';
 
 interface User {
   id: string;

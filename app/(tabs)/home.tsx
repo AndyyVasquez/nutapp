@@ -17,9 +17,20 @@ import {
 import { LineChart } from 'react-native-chart-kit';
 import BottomNavbar from './navbar';
 
+// Configuración dinámica del servidor según el entorno
+const getServerURL = () => {
+  // En desarrollo - usa IP local o localhost
+  if (__DEV__) {
+    // Puedes cambiar esta IP por la tuya cuando desarrolles
+    return 'http://10.13.8.70:3001';
+  }
+  
+  // En producción - usa tu dominio
+  return 'https://tudominio.com/api'; // ⚠️ CAMBIAR POR TU DOMINIO
+};
 
+const SERVER_API_URL = getServerURL();
 
-const SERVER_API_URL = 'https://integradora1.com/'; 
 
 console.log('🌍 Usando servidor:', SERVER_API_URL);
 
@@ -46,6 +57,14 @@ interface EstadisticasDiarias {
   grupos: string[];
 }
 
+interface ResumenDiario {
+  hora: number;
+  calorias: number;
+  comidas: number;
+  grupos: string | null;
+  detalles: string | null;
+}
+
 interface ResumenSemanal {
   lunes: number;
   martes: number;
@@ -69,6 +88,7 @@ const HomeScreen = () => {
   const [resumenSemanal, setResumenSemanal] = useState<ResumenSemanal>({
     lunes: 0, martes: 0, miercoles: 0, jueves: 0, viernes: 0, sabado: 0, domingo: 0
   });
+  const [resumenDiario, setResumenDiario] = useState<ResumenDiario[]>([]);
   const [gruposAlimentarios, setGruposAlimentarios] = useState<string[]>([]);
 
   useEffect(() => {
@@ -139,11 +159,10 @@ const HomeScreen = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        ////timeout: 10000, // 10 segundos de //timeout
+        //timeout: 10000, // 10 segundos de //timeout
       });
 
       const data = await response.json();
-      
       if (data.success) {
         console.log('✅ Servidor conectado exitosamente');
         return true;
@@ -155,7 +174,9 @@ const HomeScreen = () => {
       console.error('❌ Error de conexión al servidor:', error);
       Alert.alert(
         'Error de Conexión',
-        `No se puede conectar al servidor.\n\nVerifica:\n• Que el servidor esté corriendo\n• La IP correcta: ${SERVER_API_URL}\n• Que estés en la misma red WiFi\n\nError: ${error instanceof Error ? error.message : String(error)}`,
+        `No se puede conectar al servidor.\n\nVerifica:\n• Que el servidor esté corriendo\n• La IP correcta: ${SERVER_API_URL}\n• Que estés en la misma red WiFi\n\nError: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
         [
           { text: 'Reintentar', onPress: () => testServerConnection() },
           { text: 'Cancelar', style: 'cancel' }
@@ -177,10 +198,11 @@ const HomeScreen = () => {
 
       console.log('📊 Cargando estadísticas completas...');
 
-      // Obtener resumen completo del usuario
-      if (!user) {
-        throw new Error('Usuario no definido');
+      if(!user){
+       throw new Error('Usuario no encontrado'); 
       }
+
+      // Obtener resumen completo del usuario
       const summaryResponse = await fetch(`${SERVER_API_URL}/api/comidas/summary/${user.id}`, {
         method: 'GET',
         headers: {
@@ -230,9 +252,26 @@ const HomeScreen = () => {
         }
       }
 
-      // Obtener comidas de hoy para mostrar detalles
+      // Obtener datos por hora del día
       const today = new Date().toISOString().split('T')[0];
-      const todayResponse = await fetch(`${SERVER_API_URL}/api/comidas/${user.id}?fecha=${today}`, {
+      const dailyResponse = await fetch(`${SERVER_API_URL}/api/comidas/daily/${user.id}?fecha=${today}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (dailyResponse.ok) {
+        const dailyData = await dailyResponse.json();
+        if (dailyData.success) {
+          setResumenDiario(dailyData.datos_por_hora || []);
+          console.log('🕐 Datos diarios por hora:', dailyData.datos_por_hora);
+        }
+      }
+
+      // Obtener comidas de hoy para mostrar detalles
+      const todayForMeals = new Date().toISOString().split('T')[0];
+      const todayResponse = await fetch(`${SERVER_API_URL}/api/comidas/${user.id}?fecha=${todayForMeals}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -264,13 +303,16 @@ const HomeScreen = () => {
         }
       }
 
+   
     } catch (error) {
       console.error('❌ Error en loadCompleteStats:', error);
       
       // Mostrar error específico al usuario
       Alert.alert(
         'Error cargando datos',
-        `No se pudieron cargar las estadísticas.\n\nDetalles técnicos:\n${error.message}\n\n¿Quieres reintentar?`,
+        `No se pudieron cargar las estadísticas.\n\nDetalles técnicos:\n${
+          error instanceof Error ? error.message : String(error)
+        }\n\n¿Quieres reintentar?`,
         [
           { text: 'Usar datos offline', onPress: () => loadOfflineData() },
           { text: 'Reintentar', onPress: () => loadCompleteStats() }
@@ -328,6 +370,7 @@ const HomeScreen = () => {
     try {
       const today = new Date().toISOString().split('T')[0];
       
+      if(!user) return;
       const response = await fetch(`${SERVER_API_URL}/api/comidas/${user.id}?fecha=${today}`);
       const data = await response.json();
 
@@ -343,7 +386,7 @@ const HomeScreen = () => {
         setCaloriasHoy(totalCalorias);
 
         // Extraer grupos alimentarios únicos
-        const grupos = [...new Set(comidasDelDia.map((c: ComidaRegistrada) => c.grupo_alimenticio))];
+        const grupos = [...new Set(comidasDelDia.map((c: ComidaRegistrada) => c.grupo_alimenticio))] as string [];
         setGruposAlimentarios(grupos);
 
         console.log('📊 Estadísticas de hoy:', {
@@ -380,6 +423,7 @@ const HomeScreen = () => {
 
       for (let i = 0; i < 7; i++) {
         try {
+          if(!user) return;
           const response = await fetch(`${SERVER_API_URL}/api/comidas/${user.id}?fecha=${weekDates[i]}`);
           const data = await response.json();
 
@@ -518,34 +562,59 @@ const HomeScreen = () => {
   const screenWidth = Dimensions.get('window').width;
   const { percentage, remaining, statusColor, statusText } = getCaloriesStatus();
 
-  // Preparar datos para la gráfica con validación
+  // Datos para gráfica semanal
+  const chartDataWeekly = [
+    Math.max(0, resumenSemanal.lunes || 0),
+    Math.max(0, resumenSemanal.martes || 0),
+    Math.max(0, resumenSemanal.miercoles || 0),
+    Math.max(0, resumenSemanal.jueves || 0),
+    Math.max(0, resumenSemanal.viernes || 0),
+    Math.max(0, resumenSemanal.sabado || 0),
+    Math.max(0, resumenSemanal.domingo || 0)
+  ];
+
+  // Preparar datos para la gráfica semanal con validación
   const chartData = {
     labels: ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'],
     datasets: [
       {
-        data: [
-          Math.max(0, resumenSemanal.lunes || 0),
-          Math.max(0, resumenSemanal.martes || 0),
-          Math.max(0, resumenSemanal.miercoles || 0),
-          Math.max(0, resumenSemanal.jueves || 0),
-          Math.max(0, resumenSemanal.viernes || 0),
-          Math.max(0, resumenSemanal.sabado || 0),
-          Math.max(0, resumenSemanal.domingo || 0)
-        ],
+        data: chartDataWeekly.length > 0 ? chartDataWeekly : [0, 0, 0, 0, 0, 0, 0],
         strokeWidth: 3,
         color: (opacity = 1) => `rgba(122, 155, 87, ${opacity})`,
       },
     ],
   };
 
-  // Verificar si hay datos para mostrar la gráfica
+  // Verificar si hay datos para mostrar las gráficas
   const hasWeeklyData = Object.values(resumenSemanal).some(value => value > 0);
+  const hasDailyData = resumenDiario.some(hour => hour.calorias > 0);
   
-  console.log('📊 Datos para gráfica:', {
-    chartData: chartData.datasets[0].data,
-    hasData: hasWeeklyData,
-    resumenSemanal
-  });
+  // Debug detallado
+  console.log('📊 Debug detallado de gráficas:');
+  console.log('  📅 Resumen semanal:', resumenSemanal);
+  console.log('  📅 ¿Tiene datos semanales?', hasWeeklyData);
+  console.log('  📅 Valores semanales:', Object.values(resumenSemanal));
+  console.log('  🕐 Resumen diario:', resumenDiario);
+  console.log('  🕐 ¿Tiene datos diarios?', hasDailyData);
+  console.log('  🕐 Horas con datos:', resumenDiario.filter(h => h.calorias > 0));
+  
+  console.log('  📊 Datos finales para gráfica semanal:', chartDataWeekly);
+  console.log('  📊 Suma total semanal:', chartDataWeekly.reduce((a, b) => a + b, 0));
+
+  // Preparar datos para la gráfica diaria (por horas)
+  const dailyChartData = {
+    labels: ['6', '8', '10', '12', '14', '16', '18', '20', '22'], // Horas principales
+    datasets: [
+      {
+        data: [6, 8, 10, 12, 14, 16, 18, 20, 22].map(hour => {
+          const hourData = resumenDiario.find(h => h.hora === hour);
+          return hourData ? hourData.calorias : 0;
+        }),
+        strokeWidth: 2,
+        color: (opacity = 1) => `rgba(205, 133, 63, ${opacity})`, // Color diferente para distinguir
+      },
+    ],
+  };
 
   const chartConfig = {
     backgroundGradientFrom: '#F5F5DC',
@@ -642,6 +711,49 @@ const HomeScreen = () => {
           </View>
         )}
 
+
+        {/* Gráfica Diaria - Consumo por Horas */}
+        {hasDailyData && (
+          <View style={styles.chartCard}>
+            <Text style={styles.chartTitle}>Consumo de hoy por hora</Text>
+            
+            <LineChart
+              data={{
+          labels: resumenDiario.map(h => h.hora.toString()),
+          datasets: [
+            {
+              data: resumenDiario.map(h => h.calorias),
+              strokeWidth: 2,
+              color: (opacity = 1) => `rgba(205, 133, 63, ${opacity})`,
+            },
+          ],
+              }}
+              width={screenWidth - 60}
+              height={180}
+              chartConfig={{
+          ...chartConfig,
+          color: (opacity = 1) => `rgba(205, 133, 63, ${opacity})`,
+              }}
+              style={styles.chart}
+            />
+            
+            {/* Estadísticas del día */}
+            <View style={styles.dayStats}>
+              <Text style={styles.dayStatsTitle}>Picos de consumo hoy:</Text>
+              {resumenDiario
+                .filter(h => h.calorias > 0)
+                .sort((a, b) => b.calorias - a.calorias)
+                .slice(0, 3)
+                .map((hour, index) => (
+                  <Text key={index} style={styles.dayStatsText}>
+                    {hour.hora}:00 - {hour.calorias} kcal ({hour.comidas} comidas)
+                  </Text>
+                ))
+              }
+            </View>
+          </View>
+        )}
+
         {/* Gráfica Semanal */}
         <View style={styles.chartCard}>
           <Text style={styles.chartTitle}>Consumo esta semana</Text>
@@ -721,36 +833,8 @@ const HomeScreen = () => {
           <Text style={styles.tipText}>{getHealthTip()}</Text>
         </View>
 
-        {/* Botones de acción rápida */}
-        <View style={styles.quickActions}>
-          <Text style={styles.quickActionsTitle}>Acciones rápidas</Text>
-          
-          <View style={styles.actionButtons}>
-            <TouchableOpacity 
-              style={styles.actionButton}
-              onPress={() => router.push('/agregar-comida')}
-            >
-              <Text style={styles.actionButtonIcon}>🍽️</Text>
-              <Text style={styles.actionButtonText}>Agregar Comida</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.actionButton}
-              onPress={onRefresh}
-            >
-              <Text style={styles.actionButtonIcon}>🔄</Text>
-              <Text style={styles.actionButtonText}>Actualizar</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.actionButton, styles.secondaryButton]}
-              onPress={() => router.push('/stats')}
-            >
-              <Text style={styles.actionButtonIcon}>📊</Text>
-              <Text style={styles.actionButtonText}>Ver Stats</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+      
+      
       </ScrollView>
 
       <BottomNavbar activeTab="stats" />
@@ -953,6 +1037,23 @@ const styles = StyleSheet.create({
     color: '#666666',
     marginBottom: 2,
   },
+  dayStats: {
+    marginTop: 15,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  dayStatsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333333',
+    marginBottom: 5,
+  },
+  dayStatsText: {
+    fontSize: 12,
+    color: '#666666',
+    marginBottom: 2,
+  },
   mealsCard: {
     backgroundColor: '#F5F5DC',
     borderRadius: 12,
@@ -1124,12 +1225,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 30,
   },
+  debugCard: {
+    backgroundColor: '#FFE4E1',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 15,
+    borderLeftWidth: 3,
+    borderLeftColor: '#FF6B6B',
+  },
+  debugTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#D32F2F',
+    marginBottom: 5,
+  },
+  debugText: {
+    fontSize: 11,
+    color: '#666666',
+    marginBottom: 2,
+    fontFamily: 'monospace',
+  },
   loadingText: {
     color: '#7A9B57',
     fontSize: 16,
     marginTop: 15,
     textAlign: 'center',
-  },
+  }
 });
 
 export default HomeScreen;

@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 
 
-const API_URL = 'https://integradora1.com';
+const API_URL = 'http://10.13.8.70:3001';
     //ipconfig
 
 

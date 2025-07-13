@@ -2,7 +2,7 @@
   "name": "nutrialis",
   "main": "expo-router/entry",
   "version": "1.0.0",
-  "homepage" : "https://integradora1.com",
+  "homepage": "https://github.com/AndyyVasquez/nutapp#readme",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -11,7 +11,6 @@
     "web": "expo start --web",
     "lint": "expo lint"
   },
-  
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
     "@react-native-async-storage/async-storage": "^2.2.0",
@@ -42,6 +41,8 @@
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-native": "0.79.3",
+    "react-native-bluetooth-classic": "^1.73.0-rc.13",
+    "react-native-bluetooth-serial": "^1.0.0-rc1",
     "react-native-chart-kit": "^6.12.0",
     "react-native-gesture-handler": "~2.24.0",
     "react-native-reanimated": "~3.17.4",
@@ -56,6 +57,7 @@
     "@babel/core": "^7.25.2",
     "@react-native-community/cli": "^18.0.0",
     "@types/react": "~19.0.10",
+    "@types/react-native-bluetooth-serial": "^1.0.5",
     "@types/react-native-vector-icons": "^6.4.18",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~9.2.0",
@@ -72,6 +74,5 @@
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/AndyyVasquez/nutapp/issues"
-  },
-  "homepage": "https://github.com/AndyyVasquez/nutapp#readme"
+  }
 }
