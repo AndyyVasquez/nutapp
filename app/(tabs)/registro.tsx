@@ -126,9 +126,8 @@ const RegistroScreen = () => {
         modo: 'autonomo'
       };
 
-      
 
-      const response = await fetch('http://10.13.8.70:3001/api/register-client', {
+      const response = await fetch('https://nutweb.onrender.com/api/register-client', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

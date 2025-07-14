@@ -14,7 +14,7 @@ import Icon from 'react-native-vector-icons/FontAwesome6';
 import Icon3 from 'react-native-vector-icons/Ionicons';
 
 // Configuración del servidor
-const SERVER_API_URL = 'http://10.13.8.70:3001';
+const SERVER_API_URL = 'https://nutweb.onrender.com';
 
 const BottomNavbar = ({ activeTab = '' }) => {
   const [menuVisible, setMenuVisible] = useState(false);

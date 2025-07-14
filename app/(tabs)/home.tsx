@@ -17,19 +17,9 @@ import {
 import { LineChart } from 'react-native-chart-kit';
 import BottomNavbar from './navbar';
 
-// Configuración dinámica del servidor según el entorno
-const getServerURL = () => {
-  // En desarrollo - usa IP local o localhost
-  if (__DEV__) {
-    // Puedes cambiar esta IP por la tuya cuando desarrolles
-    return 'http://10.13.8.70:3001';
-  }
-  
-  // En producción - usa tu dominio
-  return 'https://tudominio.com/api'; // ⚠️ CAMBIAR POR TU DOMINIO
-};
 
-const SERVER_API_URL = getServerURL();
+
+const SERVER_API_URL = 'https://nutweb.onrender.com';
 
 
 console.log('🌍 Usando servidor:', SERVER_API_URL);

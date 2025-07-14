@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import BottomNavbar from './navbar';
 
-const SERVER_API_URL = 'http://10.13.8.70:3001';
+const SERVER_API_URL = 'https://nutweb.onrender.com';
 
 // ✅ Importación segura de BluetoothSerial
 let BluetoothSerial: any = null;

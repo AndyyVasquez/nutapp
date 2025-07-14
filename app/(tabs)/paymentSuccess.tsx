@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 
-const SERVER_API_URL = 'http://192.168.1.73:3001'; // Cambia por tu IP
+const SERVER_API_URL = 'https://nutweb.onrender.com';
 
 const PaymentSuccessScreen = () => {
   const params = useLocalSearchParams();
