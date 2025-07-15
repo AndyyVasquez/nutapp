@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -46,7 +47,6 @@ const FormularioNutriologoScreen = () => {
       const userData = await AsyncStorage.getItem('user');
       
       if (!userData) {
-        console.log('❌ No se encontró sesión activa, redirigiendo a login...');
         router.replace('/login');
         return;
       }
@@ -54,17 +54,14 @@ const FormularioNutriologoScreen = () => {
       const parsedUser = JSON.parse(userData);
       
       if (parsedUser.userType !== 'cliente') {
-        console.log('❌ Usuario no es cliente, limpiando sesión...');
         await AsyncStorage.removeItem('user');
         router.replace('/login');
         return;
       }
 
-      console.log('✅ Sesión válida encontrada para:', parsedUser.nombre);
       setUser(parsedUser);
       
-    } catch (error) {
-      console.error('❌ Error verificando autenticación:', error);
+    } catch {
       await AsyncStorage.removeItem('user');
       router.replace('/login');
     } finally {
@@ -73,51 +70,25 @@ const FormularioNutriologoScreen = () => {
   };
 
   const validateForm = () => {
-    if (!motivo.trim()) {
-      Alert.alert('Error', 'Por favor describe el motivo de solicitud');
-      return false;
-    }
-    if (!antecedentesHered.trim()) {
-      Alert.alert('Error', 'Por favor completa los antecedentes heredofamiliares');
-      return false;
-    }
-    if (!antecedentesPersonales.trim()) {
-      Alert.alert('Error', 'Por favor completa los antecedentes personales no patológicos');
-      return false;
-    }
-    if (!antecedentesPatologicos.trim()) {
-      Alert.alert('Error', 'Por favor completa los antecedentes personales patológicos');
-      return false;
-    }
-    if (!alergias.trim()) {
-      Alert.alert('Error', 'Por favor completa el campo de alergias e intolerancias (escribe "Ninguna" si no tienes)');
-      return false;
-    }
-    if (!aversiones.trim()) {
-      Alert.alert('Error', 'Por favor completa el campo de aversiones alimentarias (escribe "Ninguna" si no tienes)');
+    if (!motivo.trim() || !antecedentesHered.trim() || !antecedentesPersonales.trim() ||
+        !antecedentesPatologicos.trim() || !alergias.trim() || !aversiones.trim()) {
+      Alert.alert('Error', 'Completa todos los campos requeridos.');
       return false;
     }
     return true;
   };
 
   const handleEnviar = async () => {
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
     if (!user) {
-      Alert.alert('Error', 'No se encontraron datos del usuario. Por favor, inicia sesión nuevamente.');
+      Alert.alert('Error', 'No se encontraron datos del usuario. Inicia sesión nuevamente.');
       return;
     }
 
     setLoading(true);
 
     try {
-      console.log('=== DEBUG MÓVIL ===');
-      console.log('User ID:', user.id);
-      console.log('User email:', user.correo);
-      console.log('User name:', user.nombre);
-
       const payload = {
         userId: user.id,
         userEmail: user.correo,
@@ -133,101 +104,99 @@ const FormularioNutriologoScreen = () => {
         }
       };
 
-      console.log('Payload completo a enviar:', JSON.stringify(payload, null, 2));
-
-      console.log('SERVER_API_URL:', SERVER_API_URL);
-      const fullUrl = `${SERVER_API_URL}/api/submit-nutrition-form`;
-      console.log('URL completa:', fullUrl);
-
-      console.log('🚀 Enviando formulario...');
-      const response = await fetch(fullUrl, {
+      const response = await fetch(`${SERVER_API_URL}/api/submit-nutrition-form`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
-      console.log('Response status:', response.status);
-      console.log('Response headers:', response.headers);
-
       const data = await response.json();
-      console.log('Response data:', data);
-
       if (data.success) {
-        console.log('✅ Formulario enviado exitosamente');
-        
         await AsyncStorage.setItem('formularioEnviado', 'true');
-        
-        Alert.alert(
-          "✅ Solicitud Enviada",
-          "Tu solicitud ha sido enviada exitosamente. Ahora verificaremos tu acceso.",
-          [
-            { 
-              text: "Continuar", 
-              onPress: () => {
-                console.log('🔄 Navegando a token-verification...');
-                router.push('./tokenVerification');
-              }
-            }
-          ]
-        );
+        // Luego de guardar exitosamente el formulario, procesar Mercado Pago
+        await handleMercadoPagoPayment();
       } else {
-        console.log('❌ Error del servidor:', data.message);
-        Alert.alert('Error', data.message || 'No se pudo enviar la solicitud');
+        throw new Error(data.message || 'No se pudo enviar el formulario');
       }
 
-    } catch (error) {
-      console.error('❌ Error enviando formulario:', error);
-      if (typeof error === 'object' && error !== null && 'stack' in error) {
-        console.error('Error stack:', (error as { stack?: string }).stack);
-      }
-      
-      let errorMessage = 'Error de conexión desconocido';
-      
-      if (typeof error === 'object' && error !== null && 'message' in error && typeof (error as any).message === 'string') {
-        const errMsg = (error as any).message;
-        if (errMsg.includes('Network request failed')) {
-          errorMessage = 'Error de red. Verifica tu conexión a internet y que el servidor esté funcionando.';
-        } else if (errMsg.includes('JSON')) {
-          errorMessage = 'Error procesando la respuesta del servidor.';
-        } else if (errMsg.includes('fetch')) {
-          errorMessage = 'No se pudo conectar al servidor. Verifica la IP del servidor.';
-        }
-      }
-      
-      Alert.alert(
-        'Error de Conexión',
-        `${errorMessage}\n\n¿Deseas continuar sin guardar en el servidor?`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Continuar',
-            onPress: async () => {
-              console.log('💾 Guardando localmente y continuando...');
-              
-              await AsyncStorage.setItem('formularioEnviado', 'true');
-              await AsyncStorage.setItem('formularioData', JSON.stringify({
-                motivo,
-                antecedentesHered,
-                antecedentesPersonales,
-                antecedentesPatologicos,
-                alergias,
-                aversiones,
-                fechaEnvio: new Date().toISOString()
-              }));
-              
-              router.push('./token-verification');
-            }
-          }
-        ]
-      );
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Error inesperado');
     } finally {
       setLoading(false);
     }
   };
 
-  // Mostrar loading mientras se verifica la autenticación
+// FormularioNutriologoScreen.js - Solo cambios en handleMercadoPagoPayment
+
+const handleMercadoPagoPayment = async () => {
+  if (!user) return;
+
+  try {
+    console.log('💳 Iniciando pago con Mercado Pago...');
+    const payload = {
+      title: 'Plan Cliente Mensual - Nutralis',
+      price: 99,
+      quantity: 1,
+      currency_id: 'MXN',
+      user_id: user.id,
+      user_email: user.correo,
+      plan_type: 'cliente'
+    };
+
+    const response = await fetch(`${SERVER_API_URL}/api/mercadopago/create-preference`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      const text = await response.text();
+      console.error('❌ Respuesta NO JSON:', text);
+      throw new Error('Respuesta inesperada del servidor.');
+    }
+
+    const data = await response.json();
+    if (data.success && data.init_point) {
+      Alert.alert(
+        'Formulario Enviado',
+        'Tu formulario se guardó exitosamente. Ahora puedes proceder con el pago o verificar si tienes un token de nutriólogo.',
+        [
+          { text: 'Ir a Verificación', onPress: () => router.push('./tokenVerification') },
+          {
+            text: 'Pagar Ahora',
+            onPress: async () => {
+              const canOpen = await Linking.canOpenURL(data.init_point);
+              if (canOpen) {
+                await Linking.openURL(data.init_point);
+                // Después del pago, navegar a tokenVerification
+                setTimeout(() => {
+                  router.push('./tokenVerification');
+                }, 1000);
+              } else {
+                Alert.alert('Error', 'No se puede abrir Mercado Pago');
+                router.push('./tokenVerification');
+              }
+            }
+          }
+        ]
+      );
+    } else {
+      throw new Error(data.message || 'No se pudo crear la preferencia de pago.');
+    }
+
+  } catch (error: any) {
+    console.error('❌ Error iniciando pago:', error);
+    Alert.alert(
+      'Error con el pago',
+      'Hubo un problema con el pago, pero tu formulario se guardó correctamente. Puedes continuar con la verificación.',
+      [
+        { text: 'Continuar', onPress: () => router.push('./tokenVerification') }
+      ]
+    );
+  }
+};
+
   if (checkingAuth) {
     return (
       <SafeAreaView style={styles.container}>
@@ -240,112 +209,51 @@ const FormularioNutriologoScreen = () => {
     );
   }
 
-  // Si no hay usuario después del loading, no mostrar nada 
-  if (!user) {
-    return null;
-  }
+  if (!user) return null;
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor="#7A9B57" barStyle="light-content" />
-    
-
       <KeyboardAvoidingView 
         style={styles.keyboardContainer}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
         <ScrollView 
           style={styles.content} 
           contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
           <Text style={styles.title}>Profesional de la Salud</Text>
-          
           <View style={styles.formCard}>
             <Text style={styles.formTitle}>Formulario de Solicitud</Text>
-            <Text style={styles.subtitle}>Motivo de solicitud de atención nutricional *</Text>
-            
-            <TextInput
-              style={styles.textInput}
-              value={motivo}
-              onChangeText={setMotivo}
-              multiline
-              placeholder="Describe tu motivo..."
-              editable={!loading}
-              textAlignVertical="top"
-            />
-            
+
+            <Text style={styles.fieldLabel}>Motivo *</Text>
+            <TextInput style={styles.textInput} value={motivo} onChangeText={setMotivo} multiline />
+
             <Text style={styles.fieldLabel}>Antecedentes heredofamiliares *</Text>
-            <TextInput
-              style={styles.textInput}
-              value={antecedentesHered}
-              onChangeText={setAntecedentesHered}
-              multiline
-              placeholder="Describe antecedentes familiares..."
-              editable={!loading}
-              textAlignVertical="top"
-            />
-            
+            <TextInput style={styles.textInput} value={antecedentesHered} onChangeText={setAntecedentesHered} multiline />
+
             <Text style={styles.fieldLabel}>Antecedentes personales no patológicos *</Text>
-            <TextInput
-              style={styles.textInput}
-              value={antecedentesPersonales}
-              onChangeText={setAntecedentesPersonales}
-              multiline
-              placeholder="Describe antecedentes personales..."
-              editable={!loading}
-              textAlignVertical="top"
-            />
-            
+            <TextInput style={styles.textInput} value={antecedentesPersonales} onChangeText={setAntecedentesPersonales} multiline />
+
             <Text style={styles.fieldLabel}>Antecedentes personales patológicos *</Text>
-            <TextInput
-              style={styles.textInput}
-              value={antecedentesPatologicos}
-              onChangeText={setAntecedentesPatologicos}
-              multiline
-              placeholder="Describe antecedentes patológicos..."
-              editable={!loading}
-              textAlignVertical="top"
-            />
-            
-            <Text style={styles.fieldLabel}>Alergias e intolerancias alimentarias *</Text>
-            <TextInput
-              style={styles.textInput}
-              value={alergias}
-              onChangeText={setAlergias}
-              multiline
-              placeholder="Describe alergias e intolerancias (escribe 'Ninguna' si no tienes)..."
-              editable={!loading}
-              textAlignVertical="top"
-            />
-            
+            <TextInput style={styles.textInput} value={antecedentesPatologicos} onChangeText={setAntecedentesPatologicos} multiline />
+
+            <Text style={styles.fieldLabel}>Alergias e intolerancias *</Text>
+            <TextInput style={styles.textInput} value={alergias} onChangeText={setAlergias} multiline />
+
             <Text style={styles.fieldLabel}>Aversiones alimentarias *</Text>
-            <TextInput
-              style={styles.textInput}
-              value={aversiones}
-              onChangeText={setAversiones}
-              multiline
-              placeholder="Describe aversiones alimentarias (escribe 'Ninguna' si no tienes)..."
-              editable={!loading}
-              textAlignVertical="top"
-            />
+            <TextInput style={styles.textInput} value={aversiones} onChangeText={setAversiones} multiline />
 
             <Text style={styles.requiredNote}>* Campos obligatorios</Text>
-            
+
             <TouchableOpacity 
               style={[styles.enviarButton, loading && styles.disabledButton]}
               onPress={handleEnviar}
               disabled={loading}
             >
               {loading ? (
-                <View style={styles.loadingContainer}>
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                  <Text style={[styles.enviarButtonText, { marginLeft: 10 }]}>
-                    Enviando...
-                  </Text>
-                </View>
+                <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.enviarButtonText}>Enviar Solicitud</Text>
               )}
@@ -353,137 +261,95 @@ const FormularioNutriologoScreen = () => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-
       <BottomNavbar activeTab="./" />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
+  container: { 
+    flex: 1, 
+    backgroundColor: '#F5F5F5' 
   },
-  header: {
-    backgroundColor: '#7A9B57',
-    paddingVertical: 25,
-    paddingHorizontal: 20,
-    alignItems: 'center',
+  keyboardContainer: { 
+    flex: 1 
   },
-  headerText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
+  content: { 
+    flex: 1 
   },
-  keyboardContainer: {
-    flex: 1,
+  scrollContent: { 
+    paddingHorizontal: 20, 
+    paddingTop: 30, 
+    paddingBottom: 100 
   },
-  content: {
-    flex: 1,
+  title: { 
+    fontSize: 28, 
+    fontWeight: 'bold', 
+    color: '#333', 
+    marginBottom: 30, 
+    textAlign: 'center' 
   },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 30,
-    paddingBottom: 100, // Espacio extra para el BottomNavbar
+  formCard: { 
+    backgroundColor: '#F5F5DC', 
+    borderRadius: 12, 
+    padding: 20 
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333333',
-    marginBottom: 30,
-    textAlign: 'center',
+  formTitle: { 
+    fontSize: 18, 
+    fontWeight: '600', 
+    color: '#333', 
+    marginBottom: 15, 
+    textAlign: 'center' 
   },
-  formCard: {
-    backgroundColor: '#F5F5DC',
-    borderRadius: 12,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  fieldLabel: { 
+    fontSize: 14, 
+    fontWeight: '500', 
+    color: '#333', 
+    marginBottom: 8, 
+    marginTop: 15 
   },
-  formTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333333',
-    marginBottom: 15,
-    textAlign: 'center',
+  textInput: { 
+    backgroundColor: '#FFF', 
+    borderRadius: 8, 
+    borderWidth: 1, 
+    borderColor: '#E0E0E0', 
+    padding: 12, 
+    minHeight: 60, 
+    textAlignVertical: 'top' 
   },
-  subtitle: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333333',
-    marginBottom: 10,
+  requiredNote: { 
+    fontSize: 12, 
+    color: '#666', 
+    fontStyle: 'italic', 
+    marginTop: 15, 
+    textAlign: 'center' 
   },
-  fieldLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333333',
-    marginBottom: 8,
-    marginTop: 15,
+  enviarButton: { 
+    backgroundColor: '#7A9B57', 
+    borderRadius: 8, 
+    padding: 15, 
+    alignItems: 'center', 
+    marginTop: 20 
   },
-  textInput: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    paddingHorizontal: 15,
-    paddingVertical: 12,
-    minHeight: 80,
-    textAlignVertical: 'top',
-    fontSize: 14,
-    color: '#333333',
+  enviarButtonText: { 
+    color: '#FFF', 
+    fontSize: 16, 
+    fontWeight: '600' 
   },
-  requiredNote: {
-    fontSize: 12,
-    color: '#666',
-    fontStyle: 'italic',
-    marginTop: 15,
-    textAlign: 'center',
+  disabledButton: { 
+    opacity: 0.6 
   },
-  enviarButton: {
-    backgroundColor: '#7A9B57',
-    borderRadius: 8,
-    paddingVertical: 15,
-    alignItems: 'center',
-    marginTop: 20,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 4,
+  loadingScreen: { 
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    paddingHorizontal: 30 
   },
-  disabledButton: {
-    opacity: 0.6,
-  },
-  enviarButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  loadingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  loadingScreen: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 30,
-  },
-  loadingText: {
-    color: '#7A9B57',
-    fontSize: 16,
-    marginTop: 15,
-    textAlign: 'center',
+  loadingText: { 
+    color: '#7A9B57', 
+    fontSize: 16, 
+    marginTop: 15, 
+    textAlign: 'center' 
   },
 });
 

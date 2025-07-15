@@ -1,4 +1,3 @@
-// PaymentScreen.js - Pantalla de pagos en React Native
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useState } from 'react';
 import {
@@ -12,7 +11,7 @@ import {
   View
 } from 'react-native';
 
-const API_URL = 'https://nutweb.onrender.com';
+const API_URL = 'https://nutweb.onrender.com/api';
 
 type User = {
   id: string;
@@ -239,15 +238,14 @@ const PaymentScreen = () => {
       <View style={styles.plansContainer}>
         {plans.map(renderPlan)}
       </View>
-
-      <View style={styles.footer}>
+ <View style={styles.footer}>
         <Text style={styles.footerText}>
           Pagos seguros procesados por Mercado Pago
         </Text>
-        <Text style={styles.footerSubtext}>
-          Aceptamos tarjetas de crédito, débito y transferencias
-        </Text>
+       
       </View>
+
+    
     </ScrollView>
   );
 };

@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   SafeAreaView,
   StatusBar,
   StyleSheet,
@@ -15,12 +16,15 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 
-// Configuración del servidor
-const SERVER_API_URL = 'https://nutweb.onrender.com';
+// Configuración del servidor - CORREGIDA
+const SERVER_API_URL = 'https://nutweb.onrender.com/api'; // ✅ Agregado /api
 
 type User = {
   id: string;
-
+  correo?: string;
+  correo_cli?: string;
+  nombre?: string;
+  userType?: string;
 };
 
 const TokenVerificationScreen = () => {
@@ -52,7 +56,8 @@ const TokenVerificationScreen = () => {
 
     setLoading(true);
     try {
-      const response = await fetch(`${SERVER_API_URL}/api/verify-nutritionist-token`, {
+      // ✅ CORREGIDO: Agregado /api
+      const response = await fetch(`${SERVER_API_URL}/verify-nutritionist-token`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -72,7 +77,7 @@ const TokenVerificationScreen = () => {
           [
             {
               text: 'Continuar',
-              onPress: () => router.replace('/home')
+              onPress: () => router.replace('./home') // ✅ CORREGIDO: Agregado ./
             }
           ]
         );
@@ -87,8 +92,108 @@ const TokenVerificationScreen = () => {
     }
   };
 
-  const goToPayPal = () => {
-    router.push('./paypalScreen');
+  // NUEVA FUNCIÓN: Iniciar pago con Mercado Pago
+  const initiatePayment = async () => {
+    if (!user) {
+      Alert.alert('Error', 'No se encontraron datos del usuario');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      console.log('💳 Iniciando pago con Mercado Pago...');
+
+      // ✅ CORREGIDO: URL consistente con /api
+      const response = await fetch(`${SERVER_API_URL}/mercadopago/create-preference`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          title: 'Plan Cliente Mensual - Nutralis',
+          price: 99.00,
+          quantity: 1,
+          currency_id: 'MXN',
+          user_id: user.id,
+          user_email: user.correo || user.correo_cli,
+          plan_type: 'cliente'
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        console.log('✅ Preferencia creada:', data.preference_id);
+        
+        // Abrir Mercado Pago en el navegador
+        const paymentUrl = data.init_point; // Para producción
+        // const paymentUrl = data.sandbox_init_point; // Para pruebas
+        
+        const supported = await Linking.canOpenURL(paymentUrl);
+        
+        if (supported) {
+          await Linking.openURL(paymentUrl);
+          
+          // Mostrar mensaje al usuario
+          Alert.alert(
+            'Pago en proceso',
+            'Se abrió Mercado Pago en tu navegador. Una vez completado el pago, regresa a la app y reinicia sesión para ver los cambios.',
+            [
+              {
+                text: 'Verificar Pago',
+                onPress: () => checkPaymentStatus()
+              },
+              {
+                text: 'Continuar',
+                style: 'cancel'
+              }
+            ]
+          );
+        } else {
+          Alert.alert('Error', 'No se puede abrir el enlace de pago');
+        }
+
+      } else {
+        Alert.alert('Error', data.message || 'Error creando el pago');
+      }
+
+    } catch (error) {
+      console.error('❌ Error iniciando pago:', error);
+      Alert.alert('Error', 'No se pudo iniciar el pago. Intenta nuevamente.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkPaymentStatus = () => {
+    Alert.alert(
+      'Verificación de Pago',
+      'Si completaste el pago exitosamente, cierra sesión y vuelve a iniciar para ver los cambios.',
+      [
+        {
+          text: 'Cerrar Sesión',
+          onPress: logout
+        },
+        {
+          text: 'Continuar',
+          style: 'cancel'
+        }
+      ]
+    );
+  };
+
+  const logout = async () => {
+    try {
+      await AsyncStorage.removeItem('user');
+      router.replace('./login'); // ✅ CORREGIDO: Agregado ./
+    } catch (error) {
+      console.error('Error cerrando sesión:', error);
+    }
+  };
+
+  // FUNCIÓN ACTUALIZADA: Cambiar de PayPal a MercadoPago
+  const goToMercadoPago = () => {
+    initiatePayment();
   };
 
   const goBack = () => {
@@ -183,13 +288,27 @@ const TokenVerificationScreen = () => {
                 <Text style={styles.priceSubtext}>Incluye acceso completo a la app</Text>
               </View>
 
+              {/* BOTÓN ACTUALIZADO: De PayPal a Mercado Pago */}
               <TouchableOpacity 
-                style={styles.paypalButton}
-                onPress={goToPayPal}
+                style={styles.mercadopagoButton}
+                onPress={goToMercadoPago}
+                disabled={loading}
               >
-                <Icon name="logo-paypal" size={24} color="white" />
-                <Text style={styles.paypalButtonText}>Pagar con PayPal</Text>
+                {loading ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <>
+                    <Icon name="card" size={24} color="white" />
+                    <Text style={styles.mercadopagoButtonText}>Pagar con Mercado Pago</Text>
+                  </>
+                )}
               </TouchableOpacity>
+
+              <View style={styles.paymentMethods}>
+                <Text style={styles.paymentMethodsText}>
+                  💳 Aceptamos: Tarjetas de crédito, débito y transferencias
+                </Text>
+              </View>
 
               <TouchableOpacity 
                 style={styles.backToOptionsButton}
@@ -371,22 +490,34 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 5,
   },
-  paypalButton: {
-    backgroundColor: '#0070ba',
+  mercadopagoButton: {
+    backgroundColor: '#00B5FF',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 15,
     paddingHorizontal: 30,
     borderRadius: 12,
-    marginBottom: 20,
+    marginBottom: 15,
     gap: 10,
     width: '100%',
   },
-  paypalButtonText: {
+  mercadopagoButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  paymentMethods: {
+    backgroundColor: '#f0f8ff',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 20,
+    width: '100%',
+  },
+  paymentMethodsText: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
   },
   backToOptionsButton: {
     paddingVertical: 10,
