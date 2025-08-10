@@ -1,4 +1,4 @@
-// screens/AgregarComidaScreen.js - Versión integrada con BD y IoT báscula
+// screens/AgregarComidaScreen.js - Versión integrada con BD, IoT báscula y podómetro
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
@@ -19,7 +19,10 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import Icon from 'react-native-vector-icons/Ionicons';
+import ScaleAssignmentModal from './ScaleAssignmentModal'; // Importar modal de báscula
 import useFoodAPI from './hooks/useFoodApi';
+import useScale from './useScale'; // Importar hook de báscula
 
 // Configuración del servidor
 const SERVER_API_URL = 'https://nutweb.onrender.com';
@@ -62,18 +65,84 @@ const AgregarComidaScreen = () => {
   const [selectedFood, setSelectedFood] = useState<Food | null>(null);
   const [portionModalVisible, setPortionModalVisible] = useState(false);
   const [portion, setPortion] = useState('100');
-  const [isScaleConnected, setIsScaleConnected] = useState(false);
-  const [scaleWeight, setScaleWeight] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [scaleModalVisible, setScaleModalVisible] = useState(false);
 
   // Hook personalizado para la API de alimentos
   const { loading, error, searchFoods, getPopularCategories, testAPI } = useFoodAPI();
 
+  // Hook personalizado para la báscula IoT
+  const {
+    scaleData,
+    assignment: scaleAssignment,
+    loading: scaleLoading,
+    error: scaleError,
+    checkScaleStatus,
+    checkAssignment,
+    assignScale,
+    releaseScale,
+    startWeighing,
+    stopWeighing,
+    tareScale,
+    refreshData: refreshScaleData
+  } = useScale();
+
+  // Estados para el proceso de pesado
+  const [isWeighingActive, setIsWeighingActive] = useState(false);
+  const [weightRecommendation, setWeightRecommendation] = useState<string>('');
+  const [weightStatus, setWeightStatus] = useState<'waiting' | 'weighing' | 'target_reached' | 'completed'>('waiting');
+
   // Verificar autenticación al cargar
   useEffect(() => {
     checkAuthentication();
-    checkScaleConnection();
   }, []);
+
+  // Verificar estado de báscula periódicamente
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (scaleAssignment) {
+        checkScaleStatus();
+      }
+    }, 3000); // Cada 3 segundos
+
+    return () => clearInterval(interval);
+  }, [scaleAssignment]);
+
+  // Verificar asignación de báscula al cargar
+  useEffect(() => {
+    checkAssignment();
+  }, []);
+
+  // Monitorear cambios en el estado de pesado
+  useEffect(() => {
+    if (scaleData.isWeighing && selectedFood) {
+      setIsWeighingActive(true);
+      setWeightStatus('weighing');
+      
+      // Verificar si se alcanzó el peso objetivo
+      if (scaleData.weight > 0 && scaleData.targetWeight > 0) {
+        const difference = Math.abs(scaleData.weight - scaleData.targetWeight);
+        const tolerance = scaleData.targetWeight * 0.1; // 10% de tolerancia
+        
+        if (difference <= tolerance) {
+          setWeightStatus('target_reached');
+          setWeightRecommendation(`✅ Peso alcanzado: ${scaleData.weight}g (objetivo: ${scaleData.targetWeight}g)`);
+          setPortion(scaleData.weight.toString());
+        } else {
+          const diff = scaleData.weight - scaleData.targetWeight;
+          if (diff > 0) {
+            setWeightRecommendation(`⚠️ Sobrepeso: ${scaleData.weight}g (+${diff.toFixed(1)}g del objetivo)`);
+          } else {
+            setWeightRecommendation(`📉 Faltan: ${Math.abs(diff).toFixed(1)}g para alcanzar ${scaleData.targetWeight}g`);
+          }
+        }
+      }
+    } else {
+      setIsWeighingActive(false);
+      setWeightStatus('waiting');
+      setWeightRecommendation('');
+    }
+  }, [scaleData.isWeighing, scaleData.weight, scaleData.targetWeight, selectedFood]);
 
   const checkAuthentication = async () => {
     try {
@@ -106,71 +175,73 @@ const AgregarComidaScreen = () => {
     }
   };
 
-  // Verificar conexión con la báscula IoT
-  const checkScaleConnection = async () => {
-    try {
-      const response = await fetch(`${SERVER_API_URL}/api/iot/scale/status`);
-      const data = await response.json();
-      setIsScaleConnected(data.connected);
-      console.log('📟 Estado báscula:', data.connected ? 'Conectada' : 'Desconectada');
-    } catch (error) {
-      console.error('❌ Error verificando báscula:', error);
-      setIsScaleConnected(false);
+  // Iniciar proceso de pesado con báscula IoT
+  const startScaleWeighing = async () => {
+    if (!selectedFood || !scaleAssignment) {
+      Alert.alert('Error', 'Necesitas tener un alimento seleccionado y una báscula asignada');
+      return;
     }
-  };
 
-  // Obtener peso de la báscula
-  const getScaleWeight = async () => {
     try {
-      const response = await fetch(`${SERVER_API_URL}/api/iot/scale/weight`);
-      const data = await response.json();
+      const targetWeight = parseFloat(portion) || 100;
       
-      if (data.success) {
-        setScaleWeight(data.weight);
-        setPortion(data.weight.toString());
-        return data.weight;
-      } else {
-        throw new Error(data.message || 'Error obteniendo peso');
-      }
-    } catch (error) {
-      console.error('❌ Error obteniendo peso:', error);
-      Alert.alert('Error', 'No se pudo obtener el peso de la báscula');
-      return null;
-    }
-  };
-
-  // Enviar datos a la báscula IoT
-  const sendToScale = async (foodData: any) => {
-    try {
-      const scalePayload = {
-        id_cli: user?.id,
-        nombre_alimento: foodData.name,
-        grupo_alimenticio: selectedCategory?.name || 'General',
-        gramos_recomendados: parseFloat(portion),
-        calorias_estimadas: foodData.adjustedFood.calories,
-        fecha: new Date().toISOString().split('T')[0],
-        hora: new Date().toTimeString().split(' ')[0]
+      const foodData = {
+        name: selectedFood.name,
+        calories: selectedFood.calories,
+        protein: selectedFood.protein,
+        carbs: selectedFood.carbs,
+        fat: selectedFood.fat,
+        fiber: selectedFood.fiber,
+        targetWeight: targetWeight,
+        category: selectedCategory?.name || 'General'
       };
 
-      const response = await fetch(`${SERVER_API_URL}/api/iot/scale/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(scalePayload)
-      });
-
-      const result = await response.json();
+      const success = await startWeighing(foodData);
       
-      if (!result.success) {
-        throw new Error(result.message || 'Error enviando datos a báscula');
+      if (success) {
+        setIsWeighingActive(true);
+        setWeightStatus('weighing');
+        Alert.alert(
+          '⚖️ Pesado Iniciado',
+          `Coloca ${selectedFood.name} en la báscula.\nObjetivo: ${targetWeight}g\n\nEl peso se actualizará automáticamente.`
+        );
+      } else {
+        Alert.alert('Error', scaleError || 'No se pudo iniciar el pesado');
       }
-
-      console.log('✅ Datos enviados a báscula exitosamente');
-      return result;
     } catch (error) {
-      console.error('❌ Error enviando a báscula:', error);
-      throw error;
+      console.error('❌ Error iniciando pesado:', error);
+      Alert.alert('Error', 'Error iniciando el proceso de pesado');
+    }
+  };
+
+  // Detener proceso de pesado
+  const stopScaleWeighing = async () => {
+    try {
+      const success = await stopWeighing();
+      
+      if (success) {
+        setIsWeighingActive(false);
+        setWeightStatus('completed');
+        
+        // Usar el peso final de la báscula
+        if (scaleData.weight > 0) {
+          setPortion(scaleData.weight.toString());
+          Alert.alert(
+            '✅ Pesado Completado',
+            `Peso final: ${scaleData.weight}g\n¿Deseas guardar con este peso?`,
+            [
+              { text: 'Cancelar', style: 'cancel' },
+              { 
+                text: 'Guardar', 
+                onPress: () => addToFoodDiary(scaleData.weight)
+              }
+            ]
+          );
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error deteniendo pesado:', error);
+      Alert.alert('Error', 'Error deteniendo el proceso de pesado');
     }
   };
 
@@ -183,7 +254,7 @@ const AgregarComidaScreen = () => {
         hora: new Date().toTimeString().split(' ')[0],
         calorias_totales: foodData.adjustedFood.calories,
         grupo_alimenticio: selectedCategory?.name || 'General',
-        mensaje_validacion: `${foodData.name} - ${portion}g registrado exitosamente`
+        mensaje_validacion: `${foodData.name} - ${foodData.finalWeight}g registrado ${scaleAssignment ? 'con báscula IoT' : 'manualmente'}`
       };
 
       const response = await fetch(`${SERVER_API_URL}/api/comidas`, {
@@ -207,17 +278,40 @@ const AgregarComidaScreen = () => {
       throw error;
     }
   };
+// Función de debug temporal
+const testScaleEndpoints = async () => {
+  try {
+    console.log('🧪 Testing endpoints...');
+    
+    // Test 1: Status
+    const response1 = await fetch('https://nutweb.onrender.com/api/iot/scale/status');
+    const text1 = await response1.text();
+    console.log('Status response:', text1.substring(0, 200));
+    
+    // Test 2: Assignments
+    const response2 = await fetch('https://nutweb.onrender.com/api/iot/scale/assignments');
+    const text2 = await response2.text();
+    console.log('Assignments response:', text2.substring(0, 200));
+    
+  } catch (error) {
+    console.error('Test error:', error);
+  }
+};
 
+// Llamar al cargar la pantalla
+useEffect(() => {
+  testScaleEndpoints();
+}, []);
   // Guardar en base de datos no relacional (MongoDB)
-  const saveToNoRelationalDB = async (foodData: any, idComida: number, pesoReal?: number) => {
+  const saveToNoRelationalDB = async (foodData: any, idComida: number) => {
     try {
       const payload = {
         id_cli: user?.id,
         id_comida: idComida,
         nombre_alimento: foodData.name,
         grupo_alimenticio: selectedCategory?.name || 'General',
-        gramos_pesados: pesoReal || parseFloat(portion),
-        gramos_recomendados: parseFloat(portion),
+        gramos_pesados: foodData.finalWeight,
+        gramos_recomendados: foodData.recommendedWeight || foodData.finalWeight,
         calorias_estimadas: foodData.adjustedFood.calories,
         fecha: new Date().toISOString().split('T')[0],
         hora: new Date().toTimeString().split(' ')[0],
@@ -228,7 +322,13 @@ const AgregarComidaScreen = () => {
           fibra: foodData.adjustedFood.fiber,
           nutriscore: foodData.nutriscore,
           novaGroup: foodData.novaGroup
-        }
+        },
+        metodo_pesado: scaleAssignment ? 'bascula_iot' : 'manual',
+        bascula_info: scaleAssignment ? {
+          device_id: scaleAssignment.device_id,
+          peso_objetivo: scaleData.targetWeight,
+          precision_alcanzada: Math.abs(foodData.finalWeight - scaleData.targetWeight) <= (scaleData.targetWeight * 0.1)
+        } : null
       };
 
       const response = await fetch(`${SERVER_API_URL}/api/comidas/mongo`, {
@@ -346,7 +446,6 @@ const AgregarComidaScreen = () => {
   const selectFood = (food: Food) => {
     setSelectedFood(food);
     setPortion('100');
-    setScaleWeight(null);
     
     const novaInfo = food.novaGroup 
       ? `\n🏷️ Procesamiento: ${getNovaDescription(food.novaGroup)}`
@@ -390,44 +489,26 @@ const AgregarComidaScreen = () => {
     return colors[novaGroup as keyof typeof colors] || '#9E9E9E';
   };
 
-  // Usar báscula para obtener peso
-  const useScaleWeight = async () => {
-    if (!isScaleConnected) {
-      Alert.alert('Error', 'La báscula no está conectada');
-      return;
-    }
-
-    try {
-      const weight = await getScaleWeight();
-      if (weight) {
-        Alert.alert(
-          'Peso obtenido',
-          `La báscula indica: ${weight}g\n¿Deseas usar este peso?`,
-          [
-            { text: 'Cancelar', style: 'cancel' },
-            { 
-              text: 'Usar peso', 
-              onPress: () => {
-                setPortion(weight.toString());
-                setScaleWeight(weight);
-              }
-            }
-          ]
-        );
-      }
-    } catch (error) {
-      Alert.alert('Error', 'No se pudo obtener el peso de la báscula');
-    }
+  // Función para obtener color del Nutri-Score
+  const getNutriScoreColor = (score: string) => {
+    const colors: { [key: string]: string } = {
+      'a': '#038141',
+      'b': '#85bb2f',
+      'c': '#fecb02',
+      'd': '#ee8100',
+      'e': '#e63312'
+    };
+    return colors[score.toLowerCase()] || '#ccc';
   };
 
   // Agregar al diario con guardado completo
-  const addToFoodDiary = async () => {
+  const addToFoodDiary = async (finalWeight?: number) => {
     if (isSaving) return;
     
     try {
       setIsSaving(true);
       
-      const portionNum = parseFloat(portion);
+      const portionNum = finalWeight || parseFloat(portion);
       if (isNaN(portionNum) || portionNum <= 0) {
         Alert.alert('Error', 'Ingresa una porción válida');
         return;
@@ -449,7 +530,9 @@ const AgregarComidaScreen = () => {
 
       const foodData = {
         ...selectedFood,
-        adjustedFood: adjustedFood
+        adjustedFood: adjustedFood,
+        finalWeight: portionNum,
+        recommendedWeight: parseFloat(portion)
       };
 
       // Paso 1: Guardar en localStorage (backup local)
@@ -463,20 +546,16 @@ const AgregarComidaScreen = () => {
         date: new Date().toISOString().split('T')[0],
         timestamp: new Date().toISOString(),
         portion: portionNum,
-        meal: 'general'
+        meal: 'general',
+        weighingMethod: scaleAssignment ? 'iot_scale' : 'manual'
       };
       
       diary.push(newEntry);
       await AsyncStorage.setItem('foodDiary', JSON.stringify(diary));
 
-      // Paso 2: Enviar a báscula IoT (si está conectada)
-      if (isScaleConnected) {
-        try {
-          await sendToScale(foodData);
-          console.log('✅ Datos enviados a báscula IoT');
-        } catch (error) {
-          console.warn('⚠️ Error enviando a báscula, continuando sin IoT');
-        }
+      // Paso 2: Detener pesado si está activo
+      if (isWeighingActive) {
+        await stopWeighing();
       }
 
       // Paso 3: Guardar en base de datos relacional
@@ -484,19 +563,25 @@ const AgregarComidaScreen = () => {
       console.log('✅ Guardado en BD relacional con ID:', idComida);
 
       // Paso 4: Guardar en MongoDB
-      const mongoId = await saveToNoRelationalDB(foodData, idComida, scaleWeight !== null ? scaleWeight : undefined);
+      const mongoId = await saveToNoRelationalDB(foodData, idComida);
       console.log('✅ Guardado en MongoDB con ID:', mongoId);
 
       // Mostrar confirmación de éxito
+      const weighingInfo = scaleAssignment ? 
+        `\n⚖️ Pesado con báscula IoT` : 
+        '\n📝 Registrado manualmente';
+
       Alert.alert(
         '¡Registrado exitosamente!', 
-        `${selectedFood.name} (${portionNum}g) se registró completamente:\n\n🔥 ${adjustedFood.calories} kcal\n📊 Guardado en bases de datos\n${isScaleConnected ? '📟 Enviado a báscula IoT' : ''}`,
+        `${selectedFood.name} (${portionNum}g) se registró completamente:\n\n🔥 ${adjustedFood.calories} kcal\n📊 Guardado en bases de datos${weighingInfo}`,
         [
           {
             text: 'Agregar otro',
             onPress: () => {
               setPortionModalVisible(false);
-              setScaleWeight(null);
+              setIsWeighingActive(false);
+              setWeightStatus('waiting');
+              setWeightRecommendation('');
             }
           },
           {
@@ -504,7 +589,9 @@ const AgregarComidaScreen = () => {
             onPress: () => {
               setPortionModalVisible(false);
               setSearchModalVisible(false);
-              setScaleWeight(null);
+              setIsWeighingActive(false);
+              setWeightStatus('waiting');
+              setWeightRecommendation('');
             }
           }
         ]
@@ -560,18 +647,6 @@ const AgregarComidaScreen = () => {
     </TouchableOpacity>
   );
 
-  // Función para obtener color del Nutri-Score
-  const getNutriScoreColor = (score: string) => {
-    const colors: { [key: string]: string } = {
-      'a': '#038141',
-      'b': '#85bb2f',
-      'c': '#fecb02',
-      'd': '#ee8100',
-      'e': '#e63312'
-    };
-    return colors[score.toLowerCase()] || '#ccc';
-  };
-
   // Mostrar loading mientras se verifica la autenticación
   if (checkingAuth) {
     return (
@@ -599,11 +674,18 @@ const AgregarComidaScreen = () => {
           <Text style={styles.backButton}>← Volver</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Agregar Comida</Text>
-        <View style={styles.scaleStatus}>
-          <Text style={[styles.scaleIndicator, { color: isScaleConnected ? '#4CAF50' : '#F44336' }]}>
-            📟 {isScaleConnected ? 'Conectada' : 'Desconectada'}
-          </Text>
-        </View>
+        <TouchableOpacity onPress={() => setScaleModalVisible(true)}>
+          <View style={styles.scaleStatus}>
+            <Text style={[styles.scaleIndicator, { 
+              color: scaleAssignment && scaleData.connected ? '#4CAF50' : 
+                     scaleAssignment ? '#FF9800' : '#F44336' 
+            }]}>
+              ⚖️ {scaleAssignment ? 
+                  (scaleData.connected ? 'Conectada' : 'Asignada') : 
+                  'Sin Asignar'}
+            </Text>
+          </View>
+        </TouchableOpacity>
       </View>
 
       {/* Categories */}
@@ -708,7 +790,7 @@ const AgregarComidaScreen = () => {
         </SafeAreaView>
       </Modal>
 
-      {/* Modal para seleccionar porción */}
+      {/* Modal para seleccionar porción con báscula IoT */}
       <Modal
         animationType="fade"
         transparent={true}
@@ -736,6 +818,74 @@ const AgregarComidaScreen = () => {
               </View>
             )}
 
+            {/* Estado de la báscula */}
+            {scaleAssignment && (
+              <View style={styles.scaleSection}>
+                <Text style={styles.scaleSectionTitle}>⚖️ Báscula IoT</Text>
+                <View style={[styles.scaleStatusCard, {
+                  backgroundColor: scaleData.connected ? '#E8F5E8' : '#FFEBEE'
+                }]}>
+                  <Text style={styles.scaleStatusText}>
+                    Estado: {scaleData.connected ? 'Conectada' : 'Desconectada'}
+                  </Text>
+                  {scaleData.connected && (
+                    <Text style={styles.scaleWeightText}>
+                      Peso actual: {scaleData.weight}g
+                    </Text>
+                  )}
+                  
+                  {isWeighingActive && (
+                    <View style={styles.weighingStatus}>
+                      <Text style={styles.weighingStatusText}>
+                        {weightStatus === 'weighing' && '⏳ Pesando...'}
+                        {weightStatus === 'target_reached' && '✅ Peso alcanzado'}
+                        {weightStatus === 'completed' && '🎉 Completado'}
+                      </Text>
+                      {weightRecommendation && (
+                        <Text style={styles.weightRecommendation}>
+                          {weightRecommendation}
+                        </Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+
+                {/* Botones de control de báscula */}
+                <View style={styles.scaleControls}>
+                  {!isWeighingActive ? (
+                    <>
+                      <TouchableOpacity
+                        style={[styles.scaleControlButton, styles.tareButton]}
+                        onPress={tareScale}
+                        disabled={scaleLoading || !scaleData.connected}
+                      >
+                        <Icon name="refresh-outline" size={16} color="#FFFFFF" />
+                        <Text style={styles.scaleControlText}>Tarar</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={[styles.scaleControlButton, styles.startWeighingButton]}
+                        onPress={startScaleWeighing}
+                        disabled={scaleLoading || !scaleData.connected}
+                      >
+                        <Icon name="scale-outline" size={16} color="#FFFFFF" />
+                        <Text style={styles.scaleControlText}>Iniciar Pesado</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.scaleControlButton, styles.stopWeighingButton]}
+                      onPress={stopScaleWeighing}
+                      disabled={scaleLoading}
+                    >
+                      <Icon name="stop" size={16} color="#FFFFFF" />
+                      <Text style={styles.scaleControlText}>Detener Pesado</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            )}
+
             <View style={styles.portionInputContainer}>
               <Text style={styles.portionLabel}>Cantidad (gramos):</Text>
               <View style={styles.portionInputRow}>
@@ -745,21 +895,17 @@ const AgregarComidaScreen = () => {
                   onChangeText={setPortion}
                   keyboardType="numeric"
                   placeholder="100"
+                  editable={!isWeighingActive}
                 />
-                {isScaleConnected && (
+                {!scaleAssignment && (
                   <TouchableOpacity
-                    style={styles.scaleButton}
-                    onPress={useScaleWeight}
+                    style={styles.assignScaleButton}
+                    onPress={() => setScaleModalVisible(true)}
                   >
-                    <Text style={styles.scaleButtonText}>📟 Usar Báscula</Text>
+                    <Text style={styles.assignScaleButtonText}>📟 Asignar Báscula</Text>
                   </TouchableOpacity>
                 )}
               </View>
-              {scaleWeight && (
-                <Text style={styles.scaleWeightText}>
-                  ⚖️ Peso de báscula: {scaleWeight}g
-                </Text>
-              )}
             </View>
 
             {selectedFood && portion && !isNaN(parseFloat(portion)) && (
@@ -783,7 +929,12 @@ const AgregarComidaScreen = () => {
             <View style={styles.portionModalButtons}>
               <TouchableOpacity
                 style={[styles.portionModalButton, styles.cancelButton]}
-                onPress={() => setPortionModalVisible(false)}
+                onPress={() => {
+                  setPortionModalVisible(false);
+                  if (isWeighingActive) {
+                    stopWeighing();
+                  }
+                }}
                 disabled={isSaving}
               >
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
@@ -791,7 +942,7 @@ const AgregarComidaScreen = () => {
               
               <TouchableOpacity
                 style={[styles.portionModalButton, styles.addButton, isSaving && styles.disabledButton]}
-                onPress={addToFoodDiary}
+                onPress={() => addToFoodDiary()}
                 disabled={isSaving}
               >
                 {isSaving ? (
@@ -804,6 +955,16 @@ const AgregarComidaScreen = () => {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Modal de asignación de báscula */}
+      <ScaleAssignmentModal
+        visible={scaleModalVisible}
+        onClose={() => setScaleModalVisible(false)}
+        onAssigned={(assignment) => {
+          console.log('✅ Báscula asignada:', assignment);
+          refreshScaleData();
+        }}
+      />
     </SafeAreaView>
   );
 };
@@ -1059,6 +1220,7 @@ const styles = StyleSheet.create({
     margin: 20,
     maxWidth: 350,
     width: '90%',
+    maxHeight: '90%',
   },
   portionModalTitle: {
     fontSize: 20,
@@ -1096,6 +1258,83 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
   },
+  // Estilos para la sección de báscula
+  scaleSection: {
+    marginBottom: 15,
+  },
+  scaleSectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 10,
+  },
+  scaleStatusCard: {
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+  },
+  scaleStatusText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 5,
+  },
+  scaleWeightText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#4CAF50',
+    textAlign: 'center',
+    marginBottom: 5,
+  },
+  weighingStatus: {
+    backgroundColor: '#FFF3E0',
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 5,
+  },
+  weighingStatusText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#E65100',
+    textAlign: 'center',
+    marginBottom: 5,
+  },
+  weightRecommendation: {
+    fontSize: 12,
+    color: '#E65100',
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  scaleControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    gap: 10,
+  },
+  scaleControlButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    flex: 1,
+    justifyContent: 'center',
+    gap: 4,
+  },
+  tareButton: {
+    backgroundColor: '#2196F3',
+  },
+  startWeighingButton: {
+    backgroundColor: '#4CAF50',
+  },
+  stopWeighingButton: {
+    backgroundColor: '#F44336',
+  },
+  scaleControlText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   portionInputContainer: {
     marginBottom: 15,
   },
@@ -1120,23 +1359,16 @@ const styles = StyleSheet.create({
     fontSize: 18,
     textAlign: 'center',
   },
-  scaleButton: {
-    backgroundColor: '#4CAF50',
+  assignScaleButton: {
+    backgroundColor: '#FF9800',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  scaleButtonText: {
+  assignScaleButtonText: {
     color: 'white',
     fontSize: 12,
     fontWeight: 'bold',
-  },
-  scaleWeightText: {
-    marginTop: 8,
-    fontSize: 14,
-    color: '#4CAF50',
-    fontWeight: 'bold',
-    textAlign: 'center',
   },
   nutritionPreview: {
     backgroundColor: '#f0f8f0',

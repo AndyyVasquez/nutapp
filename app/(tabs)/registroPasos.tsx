@@ -1,719 +1,503 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { router } from 'expo-router';
+import { format, toZonedTime } from 'date-fns-tz';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
-  PermissionsAndroid,
-  Platform,
+  Dimensions,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View
 } from 'react-native';
+import Icon2 from 'react-native-vector-icons/AntDesign';
+import Icon from 'react-native-vector-icons/FontAwesome6';
+import Icon3 from 'react-native-vector-icons/Ionicons';
+import PedometerAssignmentModal from './asignacionpodometro'; // Importar el nuevo modal
 import BottomNavbar from './navbar';
 
+
+const timezone = 'America/Mexico_City';
+const now = new Date();
+const zonedDate = toZonedTime(now, timezone);
+const formattedTime = format(zonedDate, 'HH:mm:ss', { timeZone: timezone });
+
+
+const { width } = Dimensions.get('window');
+
+// Configuración del servidor
 const SERVER_API_URL = 'https://nutweb.onrender.com';
 
-// ✅ Importación segura de BluetoothSerial
-let BluetoothSerial: any = null;
-
-try {
-  BluetoothSerial = require('react-native-bluetooth-serial');
-  console.log('✅ BluetoothSerial importado correctamente');
-} catch (error) {
-  console.warn('⚠️ BluetoothSerial no disponible:', error);
-}
-
-interface User {
-  id: string;
-  nombre: string;
-  correo: string;
-  userType: string;
-}
-
-interface BluetoothDevice {
-  id: string;
-  name: string;
-  address: string;
-}
-
+// Interfaces para TypeScript
 interface PedometerData {
-  steps: number;
-  calories: number;
-  distance: number;
-  batteryLevel: number;
-  counting: boolean;
+  pasos: number;
+  calorias_gastadas: number;
+  distancia_km: number;
+  meta_diaria: number;
+  dispositivo: string;
+  connected: boolean;
   lastUpdate: string | null;
 }
 
-const ActivityScreen = () => {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  
-  // Estados Bluetooth
-  const [bluetoothEnabled, setBluetoothEnabled] = useState(false);
-  const [discovering, setDiscovering] = useState(false);
-  const [devices, setDevices] = useState<BluetoothDevice[]>([]);
-  const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  
-  // Estados del podómetro
+interface DeviceAssignment {
+  user_id: number;
+  user_name: string;
+  device_id: string;
+  assigned_at: string;
+  status: string;
+  duration_minutes?: number;
+}
+
+const RegistroPasos = () => {
   const [pedometerData, setPedometerData] = useState<PedometerData>({
-    steps: 0,
-    calories: 0,
-    distance: 0,
-    batteryLevel: 100,
-    counting: false,
+    pasos: 0,
+    calorias_gastadas: 0,
+    distancia_km: 0,
+    meta_diaria: 10000,
+    dispositivo: 'Podómetro ESP32',
+    connected: false,
     lastUpdate: null
   });
-  const [sendingCommand, setSendingCommand] = useState(false);
 
-  useEffect(() => {
-    checkAuthentication();
-  }, []);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
+  const [assignmentModalVisible, setAssignmentModalVisible] = useState<boolean>(false);
+  const [deviceAssignment, setDeviceAssignment] = useState<DeviceAssignment | null>(null);
 
-  useEffect(() => {
-    if (user) {
-      // ✅ Solo inicializar Bluetooth si está disponible
-      if (BluetoothSerial && typeof BluetoothSerial === 'object') {
-        initializeBluetooth();
-      } else {
-        console.warn('⚠️ BluetoothSerial no disponible, modo simulado');
-        // Modo simulado para desarrollo
-        setBluetoothEnabled(false);
-        setLoading(false);
-      }
-    }
-  }, [user]);
-
-  const checkAuthentication = async () => {
+  // Obtener ID del usuario desde AsyncStorage
+  const getUserId = async (): Promise<number> => {
     try {
       const userData = await AsyncStorage.getItem('user');
-      if (!userData) {
-        router.replace('/login');
-        return;
+      if (userData) {
+        const user = JSON.parse(userData);
+        const id = user.id || user.id_cli || 1;
+        setUserId(id);
+        return id;
       }
-
-      const parsedUser = JSON.parse(userData);
-      if (parsedUser.userType !== 'cliente') {
-        await AsyncStorage.removeItem('user');
-        router.replace('/login');
-        return;
-      }
-
-      setUser(parsedUser);
+      return 1;
     } catch (error) {
-      console.error('❌ Error verificando autenticación:', error);
-      router.replace('/login');
+      console.error('Error obteniendo usuario:', error);
+      return 1;
+    }
+  };
+
+  // Verificar si el usuario tiene un podómetro asignado
+  const checkDeviceAssignment = async (): Promise<DeviceAssignment | null> => {
+    try {
+      const currentUserId = userId || await getUserId();
+      
+      const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/assignments`);
+      const result = await response.json();
+      
+      if (result.success) {
+        const userAssignment = result.assignments.find(
+          (a: DeviceAssignment) => a.user_id === currentUserId
+        );
+        
+        // Asegurar que la asignación tiene un device_id válido
+        if (userAssignment && !userAssignment.device_id) {
+          userAssignment.device_id = 'default';
+        }
+        
+        setDeviceAssignment(userAssignment || null);
+        return userAssignment || null;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error verificando asignación:', error);
+      return null;
+    }
+  };
+
+  // Función para obtener datos de MongoDB
+  const fetchPedometerData = async (showLoader: boolean = true): Promise<void> => {
+    try {
+      if (showLoader) setLoading(true);
+      
+      const currentUserId = userId || await getUserId();
+      
+      // FORZAR fecha actual del sistema
+      const today = new Date();
+      const todayString = today.getFullYear() + '-' + 
+                         String(today.getMonth() + 1).padStart(2, '0') + '-' + 
+                         String(today.getDate()).padStart(2, '0');
+      
+      console.log('📱 Obteniendo datos de pasos para usuario:', currentUserId, 'fecha:', todayString);
+      
+      const fullUrl = `${SERVER_API_URL}/api/iot/pedometer/steps/mongo/${currentUserId}?fecha=${todayString}`;
+      console.log('🌐 URL completa:', fullUrl);
+      
+      const response = await fetch(fullUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Error del servidor: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('📱 Respuesta del servidor:', result);
+      
+      if (result.success && result.data && Object.keys(result.data).length > 1) {
+        // Hay datos para hoy
+        console.log('✅ Procesando datos encontrados...');
+        
+        const newData: Partial<PedometerData> = {
+          pasos: result.data.pasos || 0,
+          calorias_gastadas: result.data.calorias_gastadas || 0,
+          distancia_km: result.data.distancia_km || 0,
+          dispositivo: result.data.dispositivo || 'Podómetro ESP32',
+          connected: (result.data.pasos || 0) > 0,
+        //  lastUpdate: result.data.hora_ultima_actualizacion || formattedTime
+};
+
+        
+        console.log('📊 Nuevos datos calculados:', newData);
+        
+        setPedometerData(prevData => ({
+          ...prevData,
+          ...newData
+        }));
+        
+        console.log('✅ Datos actualizados:', result.data.pasos, 'pasos');
+      } else {
+        // No hay datos para hoy
+        console.log('📱 No hay datos para hoy');
+        
+        setPedometerData(prevData => ({
+          ...prevData,
+          pasos: 0,
+          calorias_gastadas: 0,
+          distancia_km: 0,
+          connected: false,
+          lastUpdate: null
+        }));
+      }
+      
+      setError(null);
+    } catch (error) {
+      console.error('❌ Error obteniendo datos:', error);
+      
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : String(error);
+      
+      console.log("Error al obtener datos:", errorMessage);
+      setError('No se pudieron cargar los datos del podómetro');
+      Alert.alert('Error', 'No se pudieron cargar los datos del podómetro');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  // Función corregida para enviar comandos al podómetro
+  const sendPedometerCommand = async (command: string): Promise<void> => {
+    // Verificar que hay un dispositivo asignado
+    if (!deviceAssignment) {
+      Alert.alert('Sin Dispositivo', 'Primero debes asignar un podómetro');
+      return;
+    }
+
+    // Verificar que el dispositivo tiene un device_id válido
+    if (!deviceAssignment.device_id) {
+      Alert.alert('Error', 'El dispositivo asignado no tiene un ID válido');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      
+      const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/command`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command: command,
+          user_id: userId,
+          device_id: deviceAssignment.device_id || 'default' // Fallback a 'default'
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        Alert.alert('✅ Comando Enviado', `Comando '${command}' enviado exitosamente`);
+        
+        // Actualizar datos después de enviar comando
+        setTimeout(() => {
+          fetchPedometerData(false);
+        }, 2000);
+      } else {
+        Alert.alert('Error', result.message || 'No se pudo enviar el comando');
+      }
+
+    } catch (error) {
+      console.error('Error enviando comando:', error);
+      Alert.alert('Error', 'Error de conexión al servidor');
     } finally {
       setLoading(false);
     }
   };
 
-  const initializeBluetooth = async () => {
-    try {
-      // ✅ Verificación robusta de BluetoothSerial
-      if (!BluetoothSerial || typeof BluetoothSerial !== 'object') {
-        console.warn('⚠️ BluetoothSerial no disponible');
-        return;
-      }
-
-      // Solicitar permisos en Android
-      if (Platform.OS === 'android') {
-        try {
-          const granted = await PermissionsAndroid.requestMultiple([
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          ]);
-          console.log('📱 Permisos Bluetooth:', granted);
-        } catch (permError) {
-          console.warn('⚠️ Error solicitando permisos:', permError);
-        }
-      }
-
-      // Verificar si Bluetooth está habilitado
-      if (BluetoothSerial.isEnabled && typeof BluetoothSerial.isEnabled === 'function') {
-        const enabled = await BluetoothSerial.isEnabled();
-        setBluetoothEnabled(enabled);
-        
-        if (!enabled) {
-          Alert.alert(
-            '🔵 Bluetooth Deshabilitado',
-            'Para conectar con el podómetro ESP32, necesitas habilitar Bluetooth.',
-            [
-              { text: 'Cancelar', style: 'cancel' },
-              { text: 'Habilitar', onPress: enableBluetooth }
-            ]
-          );
-        } else {
-          console.log('✅ Bluetooth habilitado');
-          setupBluetoothListeners();
-        }
-      }
-
-    } catch (error) {
-      console.error('❌ Error inicializando Bluetooth:', error);
-    }
+  // Función para manejar la vinculación/gestión del dispositivo
+  const handleDeviceManagement = (): void => {
+    setAssignmentModalVisible(true);
   };
 
-  const enableBluetooth = async () => {
-    try {
-      if (BluetoothSerial && BluetoothSerial.enable && typeof BluetoothSerial.enable === 'function') {
-        await BluetoothSerial.enable();
-        setBluetoothEnabled(true);
-        setupBluetoothListeners();
-      }
-    } catch (error) {
-      console.error('❌ Error habilitando Bluetooth:', error);
+  // Callback cuando se asigna un dispositivo
+  const handleDeviceAssigned = (assignment: DeviceAssignment): void => {
+    // Asegurar que la asignación tiene un device_id válido
+    if (assignment && !assignment.device_id) {
+      assignment.device_id = 'default';
     }
-  };
-
-  const setupBluetoothListeners = () => {
-    try {
-      // ✅ Verificación robusta antes de configurar listeners
-      if (!BluetoothSerial || !BluetoothSerial.on || typeof BluetoothSerial.on !== 'function') {
-        console.warn('⚠️ Métodos de BluetoothSerial no disponibles');
-        return;
-      }
-
-      // Listener para datos recibidos
-      BluetoothSerial.on('read', (data: any) => {
-        console.log('📨 Datos recibidos del ESP32:', data?.data);
-        try {
-          if (data?.data) {
-            const jsonData = JSON.parse(data.data);
-            handleESP32Message(jsonData);
-          }
-        } catch (error) {
-          console.log('📨 Mensaje no JSON del ESP32:', data?.data);
-        }
-      });
-
-      // Listener para conexión
-      BluetoothSerial.on('connectionSuccess', () => {
-        console.log('✅ Conectado al ESP32');
-        if (user) {
-          sendBluetoothMessage({
-            type: 'set_user',
-            userId: user.id,
-            timestamp: Date.now()
-          });
-        }
-      });
-
-      // Listener para desconexión
-      BluetoothSerial.on('connectionFailed', () => {
-        console.log('❌ Error conectando al ESP32');
-        setConnectedDevice(null);
-        setConnecting(false);
-      });
-
-      BluetoothSerial.on('connectionLost', () => {
-        console.log('🔌 Conexión perdida con ESP32');
-        setConnectedDevice(null);
-      });
-
-      console.log('✅ Listeners de Bluetooth configurados');
-
-    } catch (error) {
-      console.error('❌ Error configurando listeners:', error);
-    }
-  };
-
-  const handleESP32Message = (data: any) => {
-    console.log('🔄 Procesando mensaje ESP32:', data);
     
-    switch (data.type) {
-      case 'connection_confirmed':
-        console.log('✅ Conexión confirmada por ESP32');
-        break;
-        
-      case 'steps_update':
-        setPedometerData(prev => ({
-          ...prev,
-          steps: data.steps || 0,
-          calories: data.calories || 0,
-          distance: data.distance || 0,
-          batteryLevel: data.batteryLevel || prev.batteryLevel,
-          counting: data.counting || false,
-          lastUpdate: new Date().toISOString()
-        }));
-        
-        // Guardar en servidor
-        saveStepsToServer(data.steps || 0);
-        break;
-        
-      case 'status_update':
-        setPedometerData(prev => ({
-          ...prev,
-          counting: data.counting || false,
-          batteryLevel: data.batteryLevel || prev.batteryLevel
-        }));
-        break;
-        
-      case 'battery_update':
-        setPedometerData(prev => ({
-          ...prev,
-          batteryLevel: data.batteryLevel || prev.batteryLevel
-        }));
-        break;
-    }
+    setDeviceAssignment(assignment);
+    setPedometerData(prevData => ({
+      ...prevData,
+      connected: true,
+      dispositivo: `ESP32 (${assignment?.device_id || 'default'})`
+    }));
   };
 
-  const saveStepsToServer = async (steps: number) => {
-    if (!user) return;
+  // Función para refrescar datos
+  const onRefresh = (): void => {
+    setRefreshing(true);
+    fetchPedometerData(false);
+    checkDeviceAssignment();
+  };
+
+  // Cargar datos al iniciar
+  useEffect(() => {
+    const initializeData = async (): Promise<void> => {
+      await getUserId();
+      await checkDeviceAssignment();
+      fetchPedometerData();
+    };
     
-    try {
-      const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id_cli: user.id,
-          steps: steps,
-          fecha: new Date().toISOString().split('T')[0]
-        })
-      });
+    initializeData();
+  }, []);
 
-      const data = await response.json();
-      if (data.success) {
-        console.log('💾 Pasos guardados en servidor:', steps);
-      }
-    } catch (error) {
-      console.error('❌ Error guardando pasos en servidor:', error);
-    }
-  };
+  // Verificar asignación periódicamente
+  useEffect(() => {
+    const interval = setInterval(() => {
+      checkDeviceAssignment();
+    }, 30000); // Cada 30 segundos
 
-  const discoverDevices = async () => {
-    if (!BluetoothSerial) {
-      Alert.alert('❌ Error', 'Bluetooth no disponible en este dispositivo');
-      return;
-    }
+    return () => clearInterval(interval);
+  }, [userId]);
 
-    try {
-      setDiscovering(true);
-      setDevices([]);
-      
-      if (BluetoothSerial.list && typeof BluetoothSerial.list === 'function') {
-        // Buscar dispositivos emparejados
-        const pairedDevices = await BluetoothSerial.list();
-        const esp32Devices = pairedDevices.filter((device: any) => 
-          device.name && (device.name.includes('ESP32') || device.name.includes('Podometro'))
-        );
-        
-        if (esp32Devices.length > 0) {
-          setDevices(esp32Devices);
-          console.log('📱 Dispositivos ESP32 encontrados:', esp32Devices);
-        } else {
-          Alert.alert(
-            '🔍 No se encontraron dispositivos',
-            'Asegúrate de que el ESP32 esté encendido y emparejado en la configuración de Bluetooth.',
-            [
-              { text: 'OK' },
-              { text: 'Buscar nuevos', onPress: discoverUnpairedDevices }
-            ]
-          );
-        }
-      }
-    } catch (error) {
-      console.error('❌ Error buscando dispositivos:', error);
-      Alert.alert('Error', 'Error buscando dispositivos: ' + (error as Error).message);
-    } finally {
-      setDiscovering(false);
-    }
-  };
+  // Calcular estadísticas
+  const progressPercentage = Math.min((pedometerData.pasos / pedometerData.meta_diaria) * 100, 100);
+  const remainingSteps = Math.max(pedometerData.meta_diaria - pedometerData.pasos, 0);
+  const isGoalReached = pedometerData.pasos >= pedometerData.meta_diaria;
 
-  const discoverUnpairedDevices = async () => {
-    if (!BluetoothSerial || !BluetoothSerial.discoverUnpairedDevices) {
-      return;
-    }
-
-    try {
-      setDiscovering(true);
-      
-      // Descubrir dispositivos no emparejados
-      const unpairedDevices = await BluetoothSerial.discoverUnpairedDevices();
-      const esp32Devices = unpairedDevices.filter((device: any) => 
-        device.name && (device.name.includes('ESP32') || device.name.includes('Podometro'))
-      );
-      
-      if (esp32Devices.length > 0) {
-        setDevices(prev => [...prev, ...esp32Devices]);
-      }
-    } catch (error) {
-      console.error('❌ Error en descubrimiento:', error);
-    } finally {
-      setDiscovering(false);
-    }
-  };
-
-  const connectToDevice = async (device: BluetoothDevice) => {
-    if (!BluetoothSerial) {
-      Alert.alert('Error', 'Bluetooth no disponible');
-      return;
-    }
-
-    try {
-      setConnecting(true);
-      console.log('🔄 Conectando a:', device.name);
-      
-      if (BluetoothSerial.connect && typeof BluetoothSerial.connect === 'function') {
-        const connected = await BluetoothSerial.connect(device.id);
-        if (connected) {
-          setConnectedDevice(device);
-          console.log('✅ Conectado a ESP32:', device.name);
-          
-          // Solicitar estado inicial
-          setTimeout(() => {
-            sendBluetoothMessage({
-              type: 'request_status',
-              timestamp: Date.now()
-            });
-          }, 1000);
-        }
-      }
-    } catch (error) {
-      console.error('❌ Error conectando:', error);
-      Alert.alert('Error', 'No se pudo conectar al dispositivo');
-    } finally {
-      setConnecting(false);
-    }
-  };
-
-  const disconnectDevice = async () => {
-    try {
-      if (BluetoothSerial && BluetoothSerial.disconnect && typeof BluetoothSerial.disconnect === 'function') {
-        await BluetoothSerial.disconnect();
-      }
-      setConnectedDevice(null);
-      console.log('🔌 Desconectado del ESP32');
-    } catch (error) {
-      console.error('❌ Error desconectando:', error);
-    }
-  };
-
-  const sendBluetoothMessage = async (message: any) => {
-    try {
-      if (BluetoothSerial && BluetoothSerial.write && typeof BluetoothSerial.write === 'function') {
-        const jsonString = JSON.stringify(message);
-        await BluetoothSerial.write(jsonString + '\n');
-        console.log('📤 Enviado a ESP32:', jsonString);
-      }
-    } catch (error) {
-      console.error('❌ Error enviando mensaje:', error);
-    }
-  };
-
-  const sendCommand = async (command: string) => {
-    if (!connectedDevice) {
-      Alert.alert('⚠️ No conectado', 'Conecta primero al podómetro ESP32');
-      return;
-    }
-
-    try {
-      setSendingCommand(true);
-      
-      await sendBluetoothMessage({
-        type: 'pedometer_command',
-        command: command,
-        userId: user?.id,
-        timestamp: Date.now()
-      });
-
-      console.log(`🎮 Comando enviado: ${command}`);
-      
-    } catch (error) {
-      console.error('❌ Error enviando comando:', error);
-      Alert.alert('Error', 'No se pudo enviar el comando');
-    } finally {
-      setSendingCommand(false);
-    }
-  };
-
-  const getStepsStatusColor = () => {
-    const progress = (pedometerData.steps / 10000) * 100;
-    if (progress >= 100) return '#4CAF50';
-    if (progress >= 75) return '#FF9800';
-    if (progress >= 50) return '#2196F3';
-    return '#9E9E9E';
-  };
-
-  const getMotivationalMessage = () => {
-    const progress = (pedometerData.steps / 10000) * 100;
-    const steps = pedometerData.steps;
-    
-    if (steps === 0) return "¡Comienza a caminar! Cada paso cuenta 👟";
-    if (progress < 25) return `¡Buen inicio! Llevas ${steps.toLocaleString()} pasos 🚶‍♀️`;
-    if (progress < 50) return `¡Vas por buen camino! ${progress.toFixed(1)}% completado 💪`;
-    if (progress < 75) return `¡Excelente progreso! Solo te falta ${(10000 - steps).toLocaleString()} pasos 🔥`;
-    if (progress < 100) return `¡Casi lo logras! Solo ${(10000 - steps).toLocaleString()} pasos más ⭐`;
-    return `¡Meta alcanzada! ${steps.toLocaleString()} pasos completados 🎉`;
-  };
-
-  const renderDevice = ({ item }: { item: BluetoothDevice }) => (
-    <TouchableOpacity
-      style={styles.deviceItem}
-      onPress={() => connectToDevice(item)}
-      disabled={connecting}
-    >
-      <View style={styles.deviceInfo}>
-        <Text style={styles.deviceName}>{item.name || 'Dispositivo desconocido'}</Text>
-        <Text style={styles.deviceAddress}>{item.address}</Text>
+  if (loading && !pedometerData.pasos) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#7A9B57" />
+        <Text style={styles.loadingText}>Cargando datos del podómetro...</Text>
       </View>
-      {connecting ? (
-        <ActivityIndicator size="small" color="#7A9B57" />
-      ) : (
-        <Text style={styles.connectText}>Conectar</Text>
-      )}
-    </TouchableOpacity>
-  );
-
-  // ✅ Pantalla de error si Bluetooth no está disponible
-  if (!BluetoothSerial) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar backgroundColor="#7A9B57" barStyle="light-content" />
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Podómetro ESP32</Text>
-          <Text style={styles.headerSubtitle}>Funcionalidad no disponible</Text>
-        </View>
-        
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorIcon}>📱</Text>
-          <Text style={styles.errorTitle}>Bluetooth no disponible</Text>
-          <Text style={styles.errorText}>
-            Esta funcionalidad requiere:
-          </Text>
-          <Text style={styles.errorText}>• Un dispositivo físico (no emulador)</Text>
-          <Text style={styles.errorText}>• Librería react-native-bluetooth-serial</Text>
-          <Text style={styles.errorText}>• Permisos de Bluetooth</Text>
-          
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
-            <Text style={styles.backButtonText}>← Volver</Text>
-          </TouchableOpacity>
-        </View>
-
-        <BottomNavbar activeTab="steps" />
-      </SafeAreaView>
     );
   }
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar backgroundColor="#7A9B57" barStyle="light-content" />
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#7A9B57" size="large" />
-          <Text style={styles.loadingText}>Cargando actividad...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!user) return null;
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar backgroundColor="#7A9B57" barStyle="light-content" />
-      
+    <View style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Podómetro ESP32</Text>
-        <Text style={styles.headerSubtitle}>¡Mantente activo con Bluetooth, {user.nombre}!</Text>
+        <Text style={styles.headerTitle}>Actividad Física</Text>
       </View>
 
       <ScrollView 
-        style={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={discoverDevices} />}
+        style={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#7A9B57']}
+            tintColor="#7A9B57"
+          />
+        }
       >
-        {/* Estado de conexión Bluetooth */}
-        <View style={[styles.connectionCard, { 
-          borderLeftColor: connectedDevice ? '#4CAF50' : '#FF5722',
-          borderLeftWidth: 4 
-        }]}>
-          <View style={styles.connectionHeader}>
-            <Text style={styles.connectionTitle}>
-              {connectedDevice ? '🟢 ESP32 Conectado' : '🔴 ESP32 Desconectado'}
-            </Text>
-            {connectedDevice && (
-              <Text style={styles.batteryText}>🔋 {pedometerData.batteryLevel}%</Text>
-            )}
-          </View>
+        <View style={styles.content}>
+          {/* Título */}
+          <Text style={styles.title}>Pasos diarios</Text>
           
-          {connectedDevice ? (
-            <View style={styles.deviceInfo}>
-              <Text style={styles.connectedDeviceName}>{connectedDevice.name}</Text>
-              <Text style={styles.deviceStatus}>
-                {pedometerData.counting ? '⏱️ Contando pasos...' : '⏸️ En pausa'}
-              </Text>
-              <TouchableOpacity 
-                style={styles.disconnectButton}
-                onPress={disconnectDevice}
-              >
-                <Text style={styles.disconnectText}>Desconectar</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View style={styles.searchContainer}>
-              <TouchableOpacity 
-                style={styles.searchButton}
-                onPress={discoverDevices}
-                disabled={discovering}
-              >
-                {discovering ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <Text style={styles.searchButtonText}>🔍 Buscar ESP32</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-
-        {/* Lista de dispositivos */}
-        {!connectedDevice && devices.length > 0 && (
-          <View style={styles.devicesCard}>
-            <Text style={styles.devicesTitle}>Dispositivos encontrados:</Text>
-            <FlatList
-              data={devices}
-              renderItem={renderDevice}
-              keyExtractor={(item) => item.id}
-              scrollEnabled={false}
-            />
-          </View>
-        )}
-
-        {/* Contador de pasos */}
-        {connectedDevice && (
-          <>
-            <View style={[styles.stepsCard, { borderLeftColor: getStepsStatusColor(), borderLeftWidth: 4 }]}>
-              <Text style={styles.stepsTitle}>Pasos de hoy</Text>
-              
-              <View style={styles.stepsDisplay}>
-                <Text style={[styles.stepsCount, { color: getStepsStatusColor() }]}>
-                  {pedometerData.steps.toLocaleString()}
-                </Text>
-                <Text style={styles.stepsGoal}>de 10,000 pasos</Text>
-              </View>
-
+          {/* Contador principal */}
+          <View style={styles.mainCounter}>
+            <Text style={styles.stepsNumber}>
+              {pedometerData.pasos.toLocaleString()}
+            </Text>
+            <Text style={styles.stepsLabel}>pasos de hoy</Text>
+            
+            {/* Barra de progreso */}
+            <View style={styles.progressBarContainer}>
               <View style={styles.progressBar}>
-                <View style={[styles.progressFill, { 
-                  width: `${Math.min((pedometerData.steps / 10000) * 100, 100)}%`,
-                  backgroundColor: getStepsStatusColor()
-                }]} />
+                <View 
+                  style={[
+                    styles.progressFill,
+                    { 
+                      width: `${progressPercentage}%`,
+                      backgroundColor: isGoalReached ? '#4CAF50' : '#7A9B57'
+                    }
+                  ]} 
+                />
               </View>
-
               <Text style={styles.progressText}>
-                {((pedometerData.steps / 10000) * 100).toFixed(1)}% completado
+                Meta: {pedometerData.meta_diaria.toLocaleString()} pasos ({progressPercentage.toFixed(1)}%)
               </Text>
-
-              <View style={styles.additionalInfo}>
-                <View style={styles.infoItem}>
-                  <Text style={styles.infoLabel}>Calorías</Text>
-                  <Text style={styles.infoValue}>{pedometerData.calories.toFixed(0)}</Text>
-                </View>
-                <View style={styles.infoItem}>
-                  <Text style={styles.infoLabel}>Distancia</Text>
-                  <Text style={styles.infoValue}>{pedometerData.distance.toFixed(2)} km</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Mensaje motivacional */}
-            <View style={styles.motivationCard}>
-              <Text style={styles.motivationText}>{getMotivationalMessage()}</Text>
-            </View>
-
-            {/* Controles */}
-            <View style={styles.controlsCard}>
-              <Text style={styles.controlsTitle}>Controles ESP32</Text>
               
-              <View style={styles.controlsGrid}>
-                <TouchableOpacity 
-                  style={[styles.controlButton, styles.startButton]}
-                  onPress={() => sendCommand('start')}
-                  disabled={sendingCommand}
-                >
-                  <Text style={styles.controlIcon}>▶️</Text>
-                  <Text style={styles.controlText}>Iniciar</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={[styles.controlButton, styles.stopButton]}
-                  onPress={() => sendCommand('stop')}
-                  disabled={sendingCommand}
-                >
-                  <Text style={styles.controlIcon}>⏸️</Text>
-                  <Text style={styles.controlText}>Pausar</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={[styles.controlButton, styles.syncButton]}
-                  onPress={() => sendCommand('send')}
-                  disabled={sendingCommand}
-                >
-                  <Text style={styles.controlIcon}>🔄</Text>
-                  <Text style={styles.controlText}>Sincronizar</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={[styles.controlButton, styles.resetButton]}
-                  onPress={() => {
-                    Alert.alert(
-                      '⚠️ Confirmar Reset',
-                      '¿Reiniciar el contador de pasos?',
-                      [
-                        { text: 'Cancelar', style: 'cancel' },
-                        { text: 'Reiniciar', onPress: () => sendCommand('reset') }
-                      ]
-                    );
-                  }}
-                  disabled={sendingCommand}
-                >
-                  <Text style={styles.controlIcon}>🔄</Text>
-                  <Text style={styles.controlText}>Reset</Text>
-                </TouchableOpacity>
-              </View>
+              {isGoalReached ? (
+                <Text style={styles.goalReached}>🎉 ¡Meta alcanzada!</Text>
+              ) : (
+                <Text style={styles.remainingSteps}>
+                  Faltan {remainingSteps.toLocaleString()} pasos
+                </Text>
+              )}
             </View>
+          </View>
 
-            {/* Última actualización */}
-            {pedometerData.lastUpdate && (
-              <View style={styles.lastUpdateCard}>
-                <Text style={styles.lastUpdateText}>
-                  📅 Última actualización: {new Date(pedometerData.lastUpdate).toLocaleString('es-ES')}
+          {/* Estadísticas adicionales */}
+          <View style={styles.statsContainer}>
+            <View style={styles.statCard}>
+              <Text style={styles.statNumber}>{Math.round(pedometerData.calorias_gastadas)}</Text>
+              <Text style={styles.statLabel}>Calorías</Text>
+              <Icon name="fire-flame-curved" size={20} color="#FF6B35" />
+            </View>
+            
+            <View style={styles.statCard}>
+              <Text style={styles.statNumber}>{pedometerData.distancia_km.toFixed(2)} km</Text>
+              <Text style={styles.statLabel}>Distancia</Text>
+              <Icon3 name="location-outline" size={20} color="#2196F3" />
+            </View>
+          </View>
+
+          {/* Estado del dispositivo */}
+          <View style={styles.deviceCard}>
+            <View style={styles.deviceHeader}>
+              <View>
+                <Text style={styles.deviceTitle}>
+                  {deviceAssignment ? 'Podómetro Asignado' : 'Gestionar Podómetro'}
+                </Text>
+                <Text style={styles.deviceSubtitle}>
+                  {deviceAssignment ? 
+                    `Dispositivo: ${deviceAssignment.device_id}` : 
+                    'Sin dispositivo asignado'
+                  }
                 </Text>
               </View>
-            )}
-          </>
-        )}
+              <View style={[
+                styles.statusIndicator,
+                { backgroundColor: deviceAssignment ? '#4CAF50' : '#F44336' }
+              ]} />
+            </View>
+            
+            {/* Imagen del dispositivo */}
+            <View style={styles.deviceImageContainer}>
+              <View style={styles.deviceImage}>
+                <Text style={styles.deviceDisplay}>
+                  {pedometerData.pasos.toLocaleString()}
+                </Text>
+                <Text style={styles.deviceDisplayLabel}>STEPS</Text>
+                <Text style={styles.deviceIcon}>🚶‍♂️</Text>
+              </View>
+            </View>
+            
+            {/* Info del estado */}
+            <View style={styles.deviceStatus}>
+              <Text style={styles.statusText}>
+                Estado: {deviceAssignment ? 
+                  (pedometerData.connected ? 'Conectado y Activo' : 'Asignado') : 
+                  'Sin Asignar'
+                }
+              </Text>
+              
+              {pedometerData.lastUpdate && (
+                <Text style={styles.lastUpdate}>
+                  {/* Última actualización: {pedometerData.lastUpdate} */}
+                </Text>
+              )}
 
-        {/* Ayuda para conexión */}
-        {!connectedDevice && (
-          <View style={styles.helpCard}>
-            <Text style={styles.helpTitle}>📱 Cómo conectar tu ESP32:</Text>
-            <Text style={styles.helpText}>1. Asegúrate de que el ESP32 esté encendido</Text>
-            <Text style={styles.helpText}>2. Ve a Configuración → Bluetooth en tu teléfono</Text>
-            <Text style={styles.helpText}>3. Busca &quot;PodometroESP32&quot; y empareja</Text>
-            <Text style={styles.helpText}>4. Regresa aquí y presiona &quot;Buscar ESP32&quot;</Text>
-            <Text style={styles.helpText}>5. Selecciona tu dispositivo de la lista</Text>
+              {deviceAssignment && (
+                <Text style={styles.assignmentInfo}>
+                  Asignado: {new Date(deviceAssignment.assigned_at).toLocaleString('es-ES')}
+                </Text>
+              )}
+            </View>
+            
+            {/* Botón de gestión */}
+            <TouchableOpacity
+              style={[
+                styles.connectButton,
+                deviceAssignment ? styles.manageButton : styles.assignButton
+              ]}
+              onPress={handleDeviceManagement}
+            >
+              <Icon3 
+                name={deviceAssignment ? "settings" : "link"} 
+                size={16} 
+                color="#FFFFFF" 
+                style={{ marginRight: 8 }} 
+              />
+              <Text style={styles.connectButtonText}>
+                {deviceAssignment ? 'Gestionar Dispositivo' : 'Asignar Podómetro'}
+              </Text>
+            </TouchableOpacity>
           </View>
-        )}
 
-        <View style={styles.bottomSpacer} />
+
+
+          {/* Botones de acción */}
+          <View style={styles.actionButtons}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => fetchPedometerData(true)}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Icon2 name="reload1" size={18} color="#FFFFFF" />
+              )}
+              <Text style={styles.actionButtonText}>Actualizar</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.actionButton, styles.secondaryButton]}
+              onPress={() => {
+                checkDeviceAssignment();
+                fetchPedometerData(false);
+              }}
+            >
+              <Icon3 name="sync-outline" size={18} color="#666" />
+              <Text style={[styles.actionButtonText, { color: '#666' }]}>Sincronizar</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Espacio para el navbar */}
+          <View style={styles.navbarSpace} />
+        </View>
       </ScrollView>
 
+      {/* Modal de asignación de podómetro */}
+      <PedometerAssignmentModal
+        visible={assignmentModalVisible}
+        onClose={() => setAssignmentModalVisible(false)}
+        onAssigned={handleDeviceAssigned}
+      />
+
+      {/* Bottom Navigation */}
       <BottomNavbar activeTab="steps" />
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -726,268 +510,212 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#F5F5F5',
   },
   loadingText: {
-    marginTop: 10,
-    color: '#7A9B57',
+    marginTop: 16,
     fontSize: 16,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 30,
-  },
-  errorIcon: {
-    fontSize: 48,
-    marginBottom: 20,
-  },
-  errorTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FF5722',
-    marginBottom: 15,
-    textAlign: 'center',
-  },
-  errorText: {
-    fontSize: 14,
-    color: '#666666',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  backButton: {
-    backgroundColor: '#7A9B57',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
-    marginTop: 20,
-  },
-  backButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+    color: '#666',
   },
   header: {
     backgroundColor: '#7A9B57',
-    paddingVertical: 20,
+    paddingTop: 50,
+    paddingBottom: 20,
     paddingHorizontal: 20,
+    alignItems: 'center',
   },
   headerTitle: {
-    color: '#F5F5DC',
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: 'bold',
+    color: '#FFFFFF',
   },
-  headerSubtitle: {
-    color: '#F5F5DC',
-    fontSize: 14,
-    opacity: 0.9,
-    marginTop: 4,
+  scrollContainer: {
+    flex: 1,
   },
   content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-  },
-  connectionCard: {
-    backgroundColor: '#F5F5DC',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  connectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  connectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333333',
-  },
-  batteryText: {
-    fontSize: 12,
-    color: '#666666',
-  },
-  deviceInfo: {
-    marginTop: 5,
-  },
-  connectedDeviceName: {
-    fontSize: 14,
-    color: '#666666',
-    marginBottom: 2,
-  },
-  deviceStatus: {
-    fontSize: 12,
-    color: '#888888',
-    marginBottom: 8,
-  },
-  disconnectButton: {
-    backgroundColor: '#FF5722',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    alignSelf: 'flex-start',
-  },
-  disconnectText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  searchContainer: {
-    marginTop: 10,
-  },
-  searchButton: {
-    backgroundColor: '#2196F3',
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  searchButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  devicesCard: {
-    backgroundColor: '#F5F5DC',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  devicesTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333333',
-    marginBottom: 10,
-  },
-  deviceItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    marginBottom: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  deviceName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333333',
-  },
-  deviceAddress: {
-    fontSize: 12,
-    color: '#666666',
-    marginTop: 2,
-  },
-  connectText: {
-    color: '#2196F3',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  stepsCard: {
-    backgroundColor: '#F5F5DC',
-    borderRadius: 12,
     padding: 20,
-    marginBottom: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
   },
-  stepsTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333333',
-    marginBottom: 15,
-    textAlign: 'center',
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 20,
   },
-  stepsDisplay: {
+  mainCounter: {
     alignItems: 'center',
-    marginBottom: 15,
+    marginBottom: 30,
   },
-  stepsCount: {
+  stepsNumber: {
     fontSize: 48,
     fontWeight: 'bold',
-    marginBottom: 5,
+    color: '#333',
+    marginBottom: 8,
   },
-  stepsGoal: {
+  stepsLabel: {
     fontSize: 16,
-    color: '#666666',
+    color: '#666',
+    marginBottom: 20,
+  },
+  progressBarContainer: {
+    width: '100%',
+    alignItems: 'center',
   },
   progressBar: {
-    height: 8,
+    width: '100%',
+    height: 12,
     backgroundColor: '#E0E0E0',
-    borderRadius: 4,
-    marginVertical: 15,
-    overflow: 'hidden',
+    borderRadius: 6,
+    marginBottom: 10,
   },
   progressFill: {
     height: '100%',
-    borderRadius: 4,
+    borderRadius: 6,
+    minWidth: 8,
   },
   progressText: {
-    textAlign: 'center',
     fontSize: 14,
-    color: '#666666',
-    marginBottom: 15,
+    color: '#666',
+    marginBottom: 5,
   },
-  additionalInfo: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingTop: 15,
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-  },
-  infoItem: {
-    alignItems: 'center',
-  },
-  infoLabel: {
-    fontSize: 12,
-    color: '#666666',
-    marginBottom: 4,
-  },
-  infoValue: {
-    fontSize: 18,
+  goalReached: {
+    fontSize: 16,
+    color: '#4CAF50',
     fontWeight: 'bold',
-    color: '#333333',
   },
-  motivationCard: {
-    backgroundColor: '#E8F5E8',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 15,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+  remainingSteps: {
+    fontSize: 12,
+    color: '#999',
   },
-  motivationText: {
-    fontSize: 14,
-    color: '#2E7D32',
-    textAlign: 'center',
-    lineHeight: 20,
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 30,
+    gap: 15,
   },
-  controlsCard: {
-    backgroundColor: '#F5F5DC',
+  statCard: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  statNumber: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 5,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 8,
+  },
+  deviceCard: {
+    backgroundColor: '#FFF8DC',
+    borderWidth: 2,
+    borderColor: '#F0E68C',
+    borderRadius: 12,
+    padding: 20,
+    marginBottom: 20,
+  },
+  deviceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  deviceTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  deviceSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 2,
+  },
+  statusIndicator: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  deviceImageContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  deviceImage: {
+    width: 100,
+    height: 140,
+    backgroundColor: '#E8E8E8',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#DDD',
+  },
+  deviceDisplay: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  deviceDisplayLabel: {
+    fontSize: 10,
+    color: '#666',
+    marginTop: 2,
+  },
+  deviceIcon: {
+    fontSize: 20,
+    marginTop: 8,
+  },
+  deviceStatus: {
+    alignItems: 'center',
     marginBottom: 15,
+  },
+  statusText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 5,
+  },
+  lastUpdate: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 2,
+  },
+  assignmentInfo: {
+    fontSize: 11,
+    color: '#999',
+  },
+  connectButton: {
+    borderRadius: 25,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+  },
+  assignButton: {
+    backgroundColor: '#7A9B57',
+  },
+  manageButton: {
+    backgroundColor: '#2196F3',
+  },
+  connectButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  controlsCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 20,
+    marginBottom: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -995,81 +723,67 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   controlsTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333333',
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
     marginBottom: 15,
     textAlign: 'center',
   },
-  controlsGrid: {
+  controlButtons: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    justifyContent: 'space-around',
     gap: 10,
   },
   controlButton: {
-    width: '48%',
-    borderRadius: 8,
-    padding: 15,
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 60,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    gap: 6,
   },
   startButton: {
     backgroundColor: '#4CAF50',
   },
-  stopButton: {
+  pauseButton: {
     backgroundColor: '#FF9800',
   },
-  syncButton: {
-    backgroundColor: '#2196F3',
-  },
   resetButton: {
-    backgroundColor: '#FF5722',
+    backgroundColor: '#F44336',
   },
-  controlIcon: {
-    fontSize: 20,
-    marginBottom: 4,
-  },
-  controlText: {
+  controlButtonText: {
     color: '#FFFFFF',
     fontSize: 12,
+    fontWeight: 'bold',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 15,
+    marginBottom: 20,
+  },
+  actionButton: {
+    backgroundColor: '#7A9B57',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  secondaryButton: {
+    backgroundColor: '#E0E0E0',
+  },
+  actionButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '600',
   },
-  lastUpdateCard: {
-    backgroundColor: '#F0F0F0',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 15,
-  },
-  lastUpdateText: {
-    fontSize: 12,
-    color: '#666666',
-    textAlign: 'center',
-  },
-  helpCard: {
-    backgroundColor: '#FFF3E0',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 15,
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9800',
-  },
-  helpTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#E65100',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 12,
-    color: '#BF360C',
-    marginBottom: 4,
-    lineHeight: 16,
-  },
-  bottomSpacer: {
-    height: 100,
+  navbarSpace: {
+    height: 20,
   },
 });
 
-export default ActivityScreen;
+export default RegistroPasos;

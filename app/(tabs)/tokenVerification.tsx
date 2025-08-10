@@ -48,49 +48,106 @@ const TokenVerificationScreen = () => {
     }
   };
 
-  const verifyToken = async () => {
-    if (!token.trim()) {
-      Alert.alert('Error', 'Por favor ingresa el token');
+// En TokenVerificationScreen.js, actualizar la función verifyToken:
+
+const verifyToken = async () => {
+  if (!token.trim()) {
+    Alert.alert('Error', 'Por favor ingresa el token');
+    return;
+  }
+
+  setLoading(true);
+  try {
+    // Primero intentar verificar como token de suscripción
+    const subscriptionResponse = await fetch(`${SERVER_API_URL}/verify-subscription-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        token: token.trim(),
+        userId: user?.id
+      })
+    });
+
+    const subscriptionData = await subscriptionResponse.json();
+
+    if (subscriptionData.success) {
+      Alert.alert(
+        '¡Token de Suscripción Válido!',
+        'Tu suscripción ha sido activada exitosamente. Ya tienes acceso completo a Nutralis.',
+        [
+          {
+            text: 'Continuar',
+            onPress: () => {
+              // Actualizar datos del usuario localmente
+              updateUserAccess();
+              router.replace('./home');
+            }
+          }
+        ]
+      );
       return;
     }
 
-    setLoading(true);
-    try {
-      // ✅ CORREGIDO: Agregado /api
-      const response = await fetch(`${SERVER_API_URL}/verify-nutritionist-token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          token: token.trim(),
-          clientId: user?.id
-        })
-      });
+    // Si no es token de suscripción, intentar como token de nutriólogo
+    const nutritionistResponse = await fetch(`${SERVER_API_URL}/verify-nutritionist-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        token: token.trim(),
+        clientId: user?.id
+      })
+    });
 
-      const data = await response.json();
+    const nutritionistData = await nutritionistResponse.json();
 
-      if (data.success) {
-        Alert.alert(
-          '¡Token Válido!',
-          `Te has vinculado exitosamente con ${data.nutritionist.name}`,
-          [
-            {
-              text: 'Continuar',
-              onPress: () => router.replace('./home') // ✅ CORREGIDO: Agregado ./
-            }
-          ]
-        );
-      } else {
-        Alert.alert('Token Inválido', data.message || 'El token ingresado no es válido');
-      }
-    } catch (error) {
-      console.error('Error verificando token:', error);
-      Alert.alert('Error', 'No se pudo verificar el token. Intenta de nuevo.');
-    } finally {
-      setLoading(false);
+    if (nutritionistData.success) {
+      Alert.alert(
+        '¡Token de Nutriólogo Válido!',
+        `Te has vinculado exitosamente con ${nutritionistData.nutritionist.name}`,
+        [
+          {
+            text: 'Continuar',
+            onPress: () => router.replace('./home')
+          }
+        ]
+      );
+    } else {
+      Alert.alert(
+        'Token Inválido', 
+        'El token ingresado no es válido. Verifica que sea un token de suscripción o de nutriólogo.'
+      );
     }
-  };
+  } catch (error) {
+    console.error('Error verificando token:', error);
+    Alert.alert('Error', 'No se pudo verificar el token. Intenta de nuevo.');
+  } finally {
+    setLoading(false);
+  }
+};
+
+// Función para actualizar el acceso del usuario localmente
+const updateUserAccess = async () => {
+  try {
+    if (user) {
+      const updatedUser = {
+        ...user,
+        tiene_acceso: true,
+        fecha_pago: new Date().toISOString()
+      };
+      
+      await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+      
+      console.log('✅ Usuario actualizado localmente con acceso');
+    }
+  } catch (error) {
+    console.error('Error actualizando usuario:', error);
+  }
+};
 
   // NUEVA FUNCIÓN: Iniciar pago con Mercado Pago
   const initiatePayment = async () => {

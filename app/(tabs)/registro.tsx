@@ -4,7 +4,10 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -16,7 +19,10 @@ import {
 const RegistroScreen = () => {
   // Estados para los campos del formulario
   const [formData, setFormData] = useState({
-    nombreCompleto: '',
+    primerNombre: '',
+    segundoNombre: '',
+    primerApellido: '',
+    segundoApellido: '',
     edad: '',
     sexo: '',
     estatura: '',
@@ -35,10 +41,15 @@ const RegistroScreen = () => {
   };
 
   const validateForm = () => {
-    const { nombreCompleto, edad, sexo, estatura, peso, correo, password } = formData;
+    const { primerNombre, primerApellido, edad, sexo, estatura, peso, correo, password } = formData;
     
-    if (!nombreCompleto.trim()) {
-      Alert.alert('Error', 'El nombre completo es requerido');
+    if (!primerNombre.trim()) {
+      Alert.alert('Error', 'El primer nombre es requerido');
+      return false;
+    }
+    
+    if (!primerApellido.trim()) {
+      Alert.alert('Error', 'El primer apellido es requerido');
       return false;
     }
     
@@ -75,31 +86,6 @@ const RegistroScreen = () => {
     return true;
   };
 
-  // Función para separar el nombre completo
-  const parseNombreCompleto = (nombreCompleto : any) => {
-    const partes = nombreCompleto.trim().split(' ');
-    
-    if (partes.length < 2) {
-      return {
-        nombre_cli: partes[0] || '',
-        app_cli: '',
-        apm_cli: ''
-      };
-    } else if (partes.length === 2) {
-      return {
-        nombre_cli: partes[0],
-        app_cli: partes[1],
-        apm_cli: ''
-      };
-    } else {
-      return {
-        nombre_cli: partes[0],
-        app_cli: partes[1],
-        apm_cli: partes.slice(2).join(' ')
-      };
-    }
-  };
-
   // Función para manejar el registro
   const handleRegistro = async () => {
     if (!validateForm()) {
@@ -109,12 +95,10 @@ const RegistroScreen = () => {
     setLoading(true);
 
     try {
-      const { nombre_cli, app_cli, apm_cli } = parseNombreCompleto(formData.nombreCompleto);
-      
       const registroData = {
-        nombre_cli,
-        app_cli,  
-        apm_cli,
+        nombre_cli: formData.primerNombre.trim(),
+        app_cli: formData.primerApellido.trim(),
+        apm_cli: formData.segundoApellido.trim() || '',
         correo_cli: formData.correo.toLowerCase().trim(),
         password_cli: formData.password,
         edad_cli: parseInt(formData.edad),
@@ -125,7 +109,6 @@ const RegistroScreen = () => {
         geb_cli: 0,  
         modo: 'autonomo'
       };
-
 
       const response = await fetch('https://nutweb.onrender.com/api/register-client', {
         method: 'POST',
@@ -171,110 +154,149 @@ const RegistroScreen = () => {
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor="#7A9B57" barStyle="light-content" />
       
-      <View style={styles.content}>
-        <View style={styles.logoContainer}>
-           <Image
-             source={require('../img/nutralis2.png')}
-             style={{ width: 200, height: 200, resizeMode: 'contain' }}
-           />
-         </View>
+      <KeyboardAvoidingView 
+        style={styles.keyboardContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+      >
+        <ScrollView 
+          contentContainerStyle={styles.scrollContainer} 
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.content}>
+            <View style={styles.logoContainer}>
+               <Image
+                 source={require('../img/nutralis2.png')}
+                 style={{ width: 200, height: 200, resizeMode: 'contain' }}
+               />
+             </View>
 
-        <View style={styles.formContainer}>
-          <TextInput
-            style={styles.input}
-            placeholder="Nombre completo"
-            placeholderTextColor="#666"
-            value={formData.nombreCompleto}
-            onChangeText={(text) => updateFormData('nombreCompleto', text)}
-            editable={!loading}
-          />
-
-          <View style={styles.rowContainer}>
+          <View style={styles.formContainer}>
             <TextInput
-              style={[styles.input, styles.halfInput]}
-              placeholder="Edad"
+              style={styles.input}
+              placeholder="Primer nombre *"
               placeholderTextColor="#666"
-              keyboardType="numeric"
-              value={formData.edad}
-              onChangeText={(text) => updateFormData('edad', text)}
+              value={formData.primerNombre}
+              onChangeText={(text) => updateFormData('primerNombre', text)}
               editable={!loading}
             />
+
             <TextInput
-              style={[styles.input, styles.halfInput]}
-              placeholder="Sexo (M/F)"
+              style={styles.input}
+              placeholder="Segundo nombre"
               placeholderTextColor="#666"
-              value={formData.sexo}
-              onChangeText={(text) => updateFormData('sexo', text)}
+              value={formData.segundoNombre}
+              onChangeText={(text) => updateFormData('segundoNombre', text)}
               editable={!loading}
-              maxLength={1}
             />
+
+            <TextInput
+              style={styles.input}
+              placeholder="Primer apellido *"
+              placeholderTextColor="#666"
+              value={formData.primerApellido}
+              onChangeText={(text) => updateFormData('primerApellido', text)}
+              editable={!loading}
+            />
+
+            <TextInput
+              style={styles.input}
+              placeholder="Segundo apellido"
+              placeholderTextColor="#666"
+              value={formData.segundoApellido}
+              onChangeText={(text) => updateFormData('segundoApellido', text)}
+              editable={!loading}
+            />
+
+            <View style={styles.rowContainer}>
+              <TextInput
+                style={[styles.input, styles.halfInput]}
+                placeholder="Edad"
+                placeholderTextColor="#666"
+                keyboardType="numeric"
+                value={formData.edad}
+                onChangeText={(text) => updateFormData('edad', text)}
+                editable={!loading}
+              />
+              <TextInput
+                style={[styles.input, styles.halfInput]}
+                placeholder="Sexo (M/F)"
+                placeholderTextColor="#666"
+                value={formData.sexo}
+                onChangeText={(text) => updateFormData('sexo', text)}
+                editable={!loading}
+                maxLength={1}
+              />
+            </View>
+
+            <View style={styles.rowContainer}>
+              <TextInput
+                style={[styles.input, styles.halfInput]}
+                placeholder="Estatura (cm)"
+                placeholderTextColor="#666"
+                keyboardType="numeric"
+                value={formData.estatura}
+                onChangeText={(text) => updateFormData('estatura', text)}
+                editable={!loading}
+              />
+              <TextInput
+                style={[styles.input, styles.halfInput]}
+                placeholder="Peso (kg)"
+                placeholderTextColor="#666"
+                keyboardType="numeric"
+                value={formData.peso}
+                onChangeText={(text) => updateFormData('peso', text)}
+                editable={!loading}
+              />
+            </View>
+
+            <TextInput
+              style={styles.input}
+              placeholder="Correo electrónico"
+              placeholderTextColor="#666"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={formData.correo}
+              onChangeText={(text) => updateFormData('correo', text)}
+              editable={!loading}
+            />
+
+            <TextInput
+              style={styles.input}
+              placeholder="Contraseña (mín. 6 caracteres)"
+              placeholderTextColor="#666"
+              secureTextEntry
+              value={formData.password}
+              onChangeText={(text) => updateFormData('password', text)}
+              editable={!loading}
+              
+            />
+            <TouchableOpacity 
+              style={[styles.registerButton, loading && styles.disabledButton]} 
+              onPress={handleRegistro}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#F5F5DC" size="small" />
+              ) : (
+                <Text style={styles.registerButtonText}>Registrarse</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.loginLink}
+              onPress={handleIniciarSesion}
+              disabled={loading}
+            >
+              <Text style={styles.loginLinkText}>
+                ¿Ya tienes cuenta? Inicia sesión
+              </Text>
+            </TouchableOpacity>
           </View>
-
-          <View style={styles.rowContainer}>
-            <TextInput
-              style={[styles.input, styles.halfInput]}
-              placeholder="Estatura (cm)"
-              placeholderTextColor="#666"
-              keyboardType="numeric"
-              value={formData.estatura}
-              onChangeText={(text) => updateFormData('estatura', text)}
-              editable={!loading}
-            />
-            <TextInput
-              style={[styles.input, styles.halfInput]}
-              placeholder="Peso (kg)"
-              placeholderTextColor="#666"
-              keyboardType="numeric"
-              value={formData.peso}
-              onChangeText={(text) => updateFormData('peso', text)}
-              editable={!loading}
-            />
-          </View>
-
-          <TextInput
-            style={styles.input}
-            placeholder="Correo electrónico"
-            placeholderTextColor="#666"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            value={formData.correo}
-            onChangeText={(text) => updateFormData('correo', text)}
-            editable={!loading}
-          />
-
-          <TextInput
-            style={styles.input}
-            placeholder="Contraseña (mín. 6 caracteres)"
-            placeholderTextColor="#666"
-            secureTextEntry
-            value={formData.password}
-            onChangeText={(text) => updateFormData('password', text)}
-            editable={!loading}
-          />
-
-          <TouchableOpacity 
-            style={[styles.registerButton, loading && styles.disabledButton]} 
-            onPress={handleRegistro}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#F5F5DC" size="small" />
-            ) : (
-              <Text style={styles.registerButtonText}>Registrarse</Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={styles.loginLink}
-            onPress={handleIniciarSesion}
-            disabled={loading}
-          >
-            <Text style={styles.loginLinkText}>
-              ¿Ya tienes cuenta? Inicia sesión
-            </Text>
-          </TouchableOpacity>
         </View>
-      </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -284,6 +306,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#7A9B57',
   },
+  keyboardContainer: {
+    flex: 1,
+  },
+  scrollContainer: {
+    flexGrow: 1,
+    paddingVertical: 20,
+  },
   content: {
     flex: 1,
     paddingHorizontal: 30,
@@ -291,7 +320,7 @@ const styles = StyleSheet.create({
   },
   logoContainer: {
     alignItems: 'center',
-    marginBottom: 60,
+    marginBottom: 40,
   },
   formContainer: {
     width: '100%',
@@ -346,6 +375,7 @@ const styles = StyleSheet.create({
   loginLink: {
     alignItems: 'center',
     marginTop: 20,
+    marginBottom: 20,
   },
   loginLinkText: {
     color: '#F5F5DC',
