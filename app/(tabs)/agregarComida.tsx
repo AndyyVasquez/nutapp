@@ -305,13 +305,16 @@ useEffect(() => {
   // Guardar en base de datos no relacional (MongoDB)
   const saveToNoRelationalDB = async (foodData: any, idComida: number) => {
     try {
+      const finalWeight = scaleAssignment && scaleData.weight > 0
+        ? scaleData.weight
+        : foodData.finalWeight;
       const payload = {
         id_cli: user?.id,
         id_comida: idComida,
         nombre_alimento: foodData.name,
         grupo_alimenticio: selectedCategory?.name || 'General',
-        gramos_pesados: foodData.finalWeight,
-        gramos_recomendados: foodData.recommendedWeight || foodData.finalWeight,
+        gramos_pesados: finalWeight,
+        gramos_recomendados: foodData.recommendedWeight || finalWeight,
         calorias_estimadas: foodData.adjustedFood.calories,
         fecha: new Date().toISOString().split('T')[0],
         hora: new Date().toTimeString().split(' ')[0],
@@ -327,31 +330,25 @@ useEffect(() => {
         bascula_info: scaleAssignment ? {
           device_id: scaleAssignment.device_id,
           peso_objetivo: scaleData.targetWeight,
-          precision_alcanzada: Math.abs(foodData.finalWeight - scaleData.targetWeight) <= (scaleData.targetWeight * 0.1)
+          peso_real_medido: finalWeight,
+          precision_alcanzada: Math.abs(finalWeight - scaleData.targetWeight) <= (scaleData.targetWeight * 0.1),
+          diferencia_objetivo: finalWeight - scaleData.targetWeight
         } : null
       };
-
       const response = await fetch(`${SERVER_API_URL}/api/comidas/mongo`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-
       const result = await response.json();
-      
-      if (!result.success) {
-        throw new Error(result.message || 'Error guardando en MongoDB');
-      }
-
-      console.log('✅ Guardado en MongoDB exitoso, ID:', result.mongoId);
+      if (!result.success) throw new Error(result.message || 'Error guardando en MongoDB');
       return result.mongoId;
     } catch (error) {
-      console.error('❌ Error guardando en MongoDB:', error);
       throw error;
     }
   };
+
+  
 
   // Función de test para diagnosticar la API
   const runAPITest = async () => {
@@ -460,7 +457,7 @@ useEffect(() => {
           style: 'cancel'
         },
         {
-          text: 'Elegir porción',
+          text: 'Pesar alimento',
           onPress: () => setPortionModalVisible(true)
         }
       ]
@@ -504,21 +501,18 @@ useEffect(() => {
   // Agregar al diario con guardado completo
   const addToFoodDiary = async (finalWeight?: number) => {
     if (isSaving) return;
-    
     try {
       setIsSaving(true);
-      
-      const portionNum = finalWeight || parseFloat(portion);
+      const portionNum = finalWeight
+        || (scaleAssignment && scaleData.weight > 0 ? scaleData.weight : parseFloat(portion));
       if (isNaN(portionNum) || portionNum <= 0) {
         Alert.alert('Error', 'Ingresa una porción válida');
         return;
       }
-
       if (!selectedFood) {
         Alert.alert('Error', 'No hay alimento seleccionado');
         return;
       }
-
       const adjustedFood = {
         ...selectedFood,
         calories: Math.round(selectedFood.calories * portionNum / 100),
@@ -527,19 +521,15 @@ useEffect(() => {
         fat: Math.round(selectedFood.fat * portionNum / 100 * 10) / 10,
         fiber: Math.round(selectedFood.fiber * portionNum / 100 * 10) / 10
       };
-
       const foodData = {
         ...selectedFood,
         adjustedFood: adjustedFood,
         finalWeight: portionNum,
         recommendedWeight: parseFloat(portion)
       };
-
-      // Paso 1: Guardar en localStorage (backup local)
       const currentDiary = await AsyncStorage.getItem('foodDiary');
       const diary = currentDiary ? JSON.parse(currentDiary) : [];
-      
-      const newEntry = {
+      diary.push({
         id: Date.now(),
         food: selectedFood,
         adjustedFood: adjustedFood,
@@ -548,67 +538,26 @@ useEffect(() => {
         portion: portionNum,
         meal: 'general',
         weighingMethod: scaleAssignment ? 'iot_scale' : 'manual'
-      };
-      
-      diary.push(newEntry);
+      });
       await AsyncStorage.setItem('foodDiary', JSON.stringify(diary));
-
-      // Paso 2: Detener pesado si está activo
-      if (isWeighingActive) {
-        await stopWeighing();
-      }
-
-      // Paso 3: Guardar en base de datos relacional
+      if (isWeighingActive) await stopWeighing();
       const idComida = await saveToRelationalDB(foodData);
-      console.log('✅ Guardado en BD relacional con ID:', idComida);
-
-      // Paso 4: Guardar en MongoDB
-      const mongoId = await saveToNoRelationalDB(foodData, idComida);
-      console.log('✅ Guardado en MongoDB con ID:', mongoId);
-
-      // Mostrar confirmación de éxito
-      const weighingInfo = scaleAssignment ? 
-        `\n⚖️ Pesado con báscula IoT` : 
-        '\n📝 Registrado manualmente';
-
+      await saveToNoRelationalDB(foodData, idComida);
       Alert.alert(
-        '¡Registrado exitosamente!', 
-        `${selectedFood.name} (${portionNum}g) se registró completamente:\n\n🔥 ${adjustedFood.calories} kcal\n📊 Guardado en bases de datos${weighingInfo}`,
-        [
-          {
-            text: 'Agregar otro',
-            onPress: () => {
-              setPortionModalVisible(false);
-              setIsWeighingActive(false);
-              setWeightStatus('waiting');
-              setWeightRecommendation('');
-            }
-          },
-          {
-            text: 'Finalizar',
-            onPress: () => {
-              setPortionModalVisible(false);
-              setSearchModalVisible(false);
-              setIsWeighingActive(false);
-              setWeightStatus('waiting');
-              setWeightRecommendation('');
-            }
-          }
-        ]
-      );
+  '✅ Comida agregada',
+  `${selectedFood.name} registrada con ${portionNum}g (${adjustedFood.calories} kcal)`
+);
+
+setSelectedFood(null); 
+setPortion('100');
+setPortionModalVisible(false); 
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('❌ Error en proceso completo:', errorMessage);
-      Alert.alert(
-        'Error al registrar', 
-        `Ocurrió un error durante el registro:\n${errorMessage}\n\nLos datos se guardaron localmente como respaldo.`
-      );
+      Alert.alert('Error', 'Ocurrió un error guardando la comida.');
     } finally {
       setIsSaving(false);
     }
   };
-
   // Renderizar item de resultado de búsqueda
   const renderFoodItem = ({ item }: { item: Food }) => (
     <TouchableOpacity 
@@ -795,7 +744,7 @@ useEffect(() => {
         animationType="fade"
         transparent={true}
         visible={portionModalVisible}
-        onRequestClose={() => setPortionModalVisible(false)}
+        onRequestClose={() => setPortionModalVisible(true)}
       >
         <KeyboardAvoidingView 
           style={styles.portionModalOverlay}
@@ -854,23 +803,7 @@ useEffect(() => {
                 <View style={styles.scaleControls}>
                   {!isWeighingActive ? (
                     <>
-                      <TouchableOpacity
-                        style={[styles.scaleControlButton, styles.tareButton]}
-                        onPress={tareScale}
-                        disabled={scaleLoading || !scaleData.connected}
-                      >
-                        <Icon name="refresh-outline" size={16} color="#FFFFFF" />
-                        <Text style={styles.scaleControlText}>Tarar</Text>
-                      </TouchableOpacity>
-                      
-                      <TouchableOpacity
-                        style={[styles.scaleControlButton, styles.startWeighingButton]}
-                        onPress={startScaleWeighing}
-                        disabled={scaleLoading || !scaleData.connected}
-                      >
-                        <Icon name="scale-outline" size={16} color="#FFFFFF" />
-                        <Text style={styles.scaleControlText}>Iniciar Pesado</Text>
-                      </TouchableOpacity>
+                 
                     </>
                   ) : (
                     <TouchableOpacity
@@ -887,16 +820,9 @@ useEffect(() => {
             )}
 
             <View style={styles.portionInputContainer}>
-              <Text style={styles.portionLabel}>Cantidad (gramos):</Text>
+              
               <View style={styles.portionInputRow}>
-                <TextInput
-                  style={styles.portionInput}
-                  value={portion}
-                  onChangeText={setPortion}
-                  keyboardType="numeric"
-                  placeholder="100"
-                  editable={!isWeighingActive}
-                />
+               
                 {!scaleAssignment && (
                   <TouchableOpacity
                     style={styles.assignScaleButton}

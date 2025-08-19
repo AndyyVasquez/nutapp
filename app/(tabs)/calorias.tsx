@@ -336,6 +336,7 @@ const CaloriasDiariasScreen = () => {
     Solicitar Nutriólogo
   </Text>.
 </Text>
+<Text style={styles.emptyText}> En caso de ya haber solicitado un nutriólogo, favor de esperar su asignación de dieta.</Text>
           <TouchableOpacity 
             style={styles.refreshButton}
             onPress={cargarDietaActual}
@@ -520,12 +521,12 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: '#7FB069',
-    height: 100,
-    paddingTop: 40,
+    height: 60,
+    paddingTop: 20,
     paddingHorizontal: 20,
   },
   backButton: {
-    padding: 8,
+    padding: 5,
   },
   content: {
     padding: 20,
@@ -536,6 +537,7 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     color: '#333',
+    marginTop: 20,
     marginBottom: 20,
   },
   summaryCard: {

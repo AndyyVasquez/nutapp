@@ -2,13 +2,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  Modal,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 
@@ -332,7 +332,7 @@ const ScaleAssignmentModal: React.FC<ModalProps> = ({ visible, onClose, onAssign
                       disabled={loading}
                     >
                       <Icon name="refresh-outline" size={16} color="#FFFFFF" />
-                      <Text style={styles.controlButtonText}>Tarar</Text>
+                    
                     </TouchableOpacity>
                   </View>
                 )}

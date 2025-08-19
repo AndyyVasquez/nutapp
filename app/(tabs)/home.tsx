@@ -636,7 +636,7 @@ const HomeScreen = () => {
             <Text style={styles.recommendationText}>{getMealTimeRecommendation()}</Text>
           </View>
           <TouchableOpacity onPress={onRefresh} style={styles.refreshButton}>
-            <Text style={styles.refreshButtonText}>🔄</Text>
+            
           </TouchableOpacity>
         </View>
       </View>

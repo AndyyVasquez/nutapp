@@ -15,15 +15,12 @@ import {
 import Icon2 from 'react-native-vector-icons/AntDesign';
 import Icon from 'react-native-vector-icons/FontAwesome6';
 import Icon3 from 'react-native-vector-icons/Ionicons';
-import PedometerAssignmentModal from './asignacionpodometro'; // Importar el nuevo modal
 import BottomNavbar from './navbar';
-
 
 const timezone = 'America/Mexico_City';
 const now = new Date();
 const zonedDate = toZonedTime(now, timezone);
 const formattedTime = format(zonedDate, 'HH:mm:ss', { timeZone: timezone });
-
 
 const { width } = Dimensions.get('window');
 
@@ -39,15 +36,29 @@ interface PedometerData {
   dispositivo: string;
   connected: boolean;
   lastUpdate: string | null;
+  sincronizado_desde?: string;
+  entry_id_thingspeak?: number;
 }
 
-interface DeviceAssignment {
+interface UserAssignment {
   user_id: number;
   user_name: string;
   device_id: string;
   assigned_at: string;
-  status: string;
-  duration_minutes?: number;
+  device_type: string;
+  connection_type?: string;
+}
+
+interface SyncStats {
+  total_documents: number;
+  thingspeak_documents: number;
+  sync_percentage: string;
+  last_sync: {
+    fecha: string;
+    pasos: number;
+    sincronizado_en: string;
+    entry_id: number;
+  } | null;
 }
 
 const RegistroPasos = () => {
@@ -56,7 +67,7 @@ const RegistroPasos = () => {
     calorias_gastadas: 0,
     distancia_km: 0,
     meta_diaria: 10000,
-    dispositivo: 'Podómetro ESP32',
+    dispositivo: 'Podómetro ESP32 (ThingSpeak)',
     connected: false,
     lastUpdate: null
   });
@@ -65,60 +76,187 @@ const RegistroPasos = () => {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<number | null>(null);
-  const [assignmentModalVisible, setAssignmentModalVisible] = useState<boolean>(false);
-  const [deviceAssignment, setDeviceAssignment] = useState<DeviceAssignment | null>(null);
+  const [userName, setUserName] = useState<string>('');
+  const [userAssignment, setUserAssignment] = useState<UserAssignment | null>(null);
+  const [syncStats, setSyncStats] = useState<SyncStats | null>(null);
 
   // Obtener ID del usuario desde AsyncStorage
-  const getUserId = async (): Promise<number> => {
+  const getUserData = async (): Promise<{id: number, name: string}> => {
     try {
       const userData = await AsyncStorage.getItem('user');
       if (userData) {
         const user = JSON.parse(userData);
-        const id = user.id || user.id_cli || 1;
+        const id = user.id || user.id_cli || 3;
+        const name = user.nombre || user.nombre_completo || `Usuario ${id}`;
         setUserId(id);
-        return id;
+        setUserName(name);
+        return { id, name };
       }
-      return 1;
+      return { id: 3, name: 'Usuario 3' };
     } catch (error) {
       console.error('Error obteniendo usuario:', error);
-      return 1;
+      return { id: 3, name: 'Usuario 3' };
     }
   };
 
-  // Verificar si el usuario tiene un podómetro asignado
-  const checkDeviceAssignment = async (): Promise<DeviceAssignment | null> => {
+  // 🔄 RUTA ACTUALIZADA: Verificar si este usuario específico está asignado
+  const checkUserAssignment = async (): Promise<void> => {
     try {
-      const currentUserId = userId || await getUserId();
+      if (!userId) return;
       
-      const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/assignments`);
-      const result = await response.json();
+      console.log('🔍 Verificando asignación de usuario...');
       
-      if (result.success) {
-        const userAssignment = result.assignments.find(
-          (a: DeviceAssignment) => a.user_id === currentUserId
-        );
-        
-        // Asegurar que la asignación tiene un device_id válido
-        if (userAssignment && !userAssignment.device_id) {
-          userAssignment.device_id = 'default';
-        }
-        
-        setDeviceAssignment(userAssignment || null);
-        return userAssignment || null;
+      // ✅ NUEVA RUTA: Verificar asignación específica del usuario
+      const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/user-assignment/${userId}`);
+      
+      if (!response.ok) {
+        throw new Error(`Error HTTP: ${response.status}`);
       }
-      return null;
+      
+      const result = await response.json();
+      console.log('🔍 Resultado verificación asignación:', result);
+      
+      if (result.success && result.is_assigned && result.assignment) {
+        setUserAssignment({
+          user_id: userId,
+          user_name: userName,
+          device_id: result.assignment.device_id,
+          assigned_at: result.assignment.assigned_at,
+          device_type: result.assignment.device_type || 'ESP32 + ThingSpeak',
+          connection_type: result.assignment.connection_type || 'thingspeak'
+        });
+        console.log('✅ Usuario asignado al podómetro');
+      } else {
+        setUserAssignment(null);
+        console.log('📱 Usuario NO está asignado al podómetro');
+      }
     } catch (error) {
-      console.error('Error verificando asignación:', error);
-      return null;
+      console.error('❌ Error verificando asignación:', error);
+      setUserAssignment(null);
     }
   };
 
-  // Función para obtener datos de MongoDB
+  // 🔄 RUTA ACTUALIZADA: Asignar usuario al podómetro ThingSpeak
+  const assignUserToPedometer = async (): Promise<void> => {
+    try {
+      if (!userId || !userName) {
+        Alert.alert('Error', 'No se pudieron cargar los datos del usuario');
+        return;
+      }
+
+      setLoading(true);
+      
+      console.log('📱 Asignando usuario al podómetro...', { userId, userName });
+
+      // ✅ RUTA MANTENIDA PERO VERIFICADA
+      const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/assign-to-user`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          user_name: userName,
+          device_id: 'thingspeak_esp32'
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error del servidor: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        setUserAssignment(result.assignment);
+        Alert.alert(
+          '✅ Podómetro Asignado',
+          `El podómetro ThingSpeak ha sido asignado a ${userName}. Los datos de pasos se sincronizarán automáticamente.`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Actualizar datos después de la asignación
+                fetchPedometerData(false);
+                fetchSyncStats();
+              }
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Error', result.message || 'No se pudo asignar el podómetro');
+      }
+
+    } catch (error) {
+      console.error('❌ Error asignando usuario:', error);
+      Alert.alert('Error', 'Error de conexión al servidor');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 🔄 RUTA ACTUALIZADA: Liberar asignación del podómetro
+  const releaseUserAssignment = async (): Promise<void> => {
+    try {
+      Alert.alert(
+        'Liberar Podómetro',
+        '¿Estás seguro de que quieres liberar el podómetro? Otros usuarios podrán usarlo.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { 
+            text: 'Liberar', 
+            style: 'destructive',
+            onPress: async () => {
+              setLoading(true);
+              
+              try {
+                // ✅ RUTA MANTENIDA
+                const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/release-assignment`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    user_id: userId
+                  }),
+                });
+
+                if (!response.ok) {
+                  throw new Error(`Error del servidor: ${response.status}`);
+                }
+
+                const result = await response.json();
+
+                if (result.success) {
+                  setUserAssignment(null);
+                  Alert.alert('✅ Liberado', 'Podómetro liberado exitosamente');
+                  // Refrescar datos
+                  await checkUserAssignment();
+                } else {
+                  Alert.alert('Error', result.message || 'No se pudo liberar el podómetro');
+                }
+
+              } catch (error) {
+                console.error('❌ Error liberando asignación:', error);
+                Alert.alert('Error', 'Error de conexión al servidor');
+              } finally {
+                setLoading(false);
+              }
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('❌ Error en liberación:', error);
+    }
+  };
+
+  // 🔄 RUTA ACTUALIZADA: Obtener datos de pasos desde MongoDB
   const fetchPedometerData = async (showLoader: boolean = true): Promise<void> => {
     try {
       if (showLoader) setLoading(true);
       
-      const currentUserId = userId || await getUserId();
+      const currentUserId = userId || (await getUserData()).id;
       
       // FORZAR fecha actual del sistema
       const today = new Date();
@@ -126,8 +264,9 @@ const RegistroPasos = () => {
                          String(today.getMonth() + 1).padStart(2, '0') + '-' + 
                          String(today.getDate()).padStart(2, '0');
       
-      console.log('📱 Obteniendo datos de pasos para usuario:', currentUserId, 'fecha:', todayString);
+      console.log('📱 Obteniendo datos de pasos (ThingSpeak→MongoDB) para usuario:', currentUserId, 'fecha:', todayString);
       
+      // ✅ RUTA MANTENIDA - Funciona correctamente
       const fullUrl = `${SERVER_API_URL}/api/iot/pedometer/steps/mongo/${currentUserId}?fecha=${todayString}`;
       console.log('🌐 URL completa:', fullUrl);
       
@@ -145,19 +284,20 @@ const RegistroPasos = () => {
       const result = await response.json();
       console.log('📱 Respuesta del servidor:', result);
       
-      if (result.success && result.data && Object.keys(result.data).length > 1) {
-        // Hay datos para hoy
+      // ✅ LÓGICA ACTUALIZADA: Verificar si hay datos válidos
+      if (result.pasos !== undefined && result.pasos !== null) {
+        // Hay datos para hoy (incluso si son 0)
         console.log('✅ Procesando datos encontrados...');
         
         const newData: Partial<PedometerData> = {
-          pasos: result.data.pasos || 0,
-          calorias_gastadas: result.data.calorias_gastadas || 0,
-          distancia_km: result.data.distancia_km || 0,
-          dispositivo: result.data.dispositivo || 'Podómetro ESP32',
-          connected: (result.data.pasos || 0) > 0,
-        //  lastUpdate: result.data.hora_ultima_actualizacion || formattedTime
-};
-
+          pasos: result.pasos || 0,
+          calorias_gastadas: result.calorias_gastadas || 0,
+          distancia_km: result.distancia_km || 0,
+          dispositivo: 'ESP32 (ThingSpeak)',
+          connected: result.pasos > 0 || result.hora_ultima_actualizacion !== null,
+          lastUpdate: result.hora_ultima_actualizacion || null,
+          sincronizado_desde: 'thingspeak'
+        };
         
         console.log('📊 Nuevos datos calculados:', newData);
         
@@ -166,7 +306,7 @@ const RegistroPasos = () => {
           ...newData
         }));
         
-        console.log('✅ Datos actualizados:', result.data.pasos, 'pasos');
+        console.log('✅ Datos actualizados:', result.pasos, 'pasos desde ThingSpeak');
       } else {
         // No hay datos para hoy
         console.log('📱 No hay datos para hoy');
@@ -191,106 +331,153 @@ const RegistroPasos = () => {
       
       console.log("Error al obtener datos:", errorMessage);
       setError('No se pudieron cargar los datos del podómetro');
-      Alert.alert('Error', 'No se pudieron cargar los datos del podómetro');
+      
+      // No mostrar alerta en refresh automático
+      if (showLoader) {
+        Alert.alert('Error', 'No se pudieron cargar los datos del podómetro');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  // Función corregida para enviar comandos al podómetro
-  const sendPedometerCommand = async (command: string): Promise<void> => {
-    // Verificar que hay un dispositivo asignado
-    if (!deviceAssignment) {
-      Alert.alert('Sin Dispositivo', 'Primero debes asignar un podómetro');
-      return;
+  // 🔄 RUTA ACTUALIZADA: Obtener estadísticas de sincronización
+  const fetchSyncStats = async (): Promise<void> => {
+    try {
+      // ✅ RUTA MANTENIDA
+      const response = await fetch(`${SERVER_API_URL}/api/sync/stats`);
+      
+      if (!response.ok) {
+        console.warn('No se pudieron obtener estadísticas de sync');
+        return;
+      }
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        setSyncStats(result.stats);
+        console.log('📊 Estadísticas de sincronización:', result.stats);
+      }
+    } catch (error) {
+      console.error('❌ Error obteniendo estadísticas de sync:', error);
     }
+  };
 
-    // Verificar que el dispositivo tiene un device_id válido
-    if (!deviceAssignment.device_id) {
-      Alert.alert('Error', 'El dispositivo asignado no tiene un ID válido');
-      return;
-    }
-
+  // 🔄 RUTA ACTUALIZADA: Forzar sincronización manual
+  const forceSyncFromThingSpeak = async (): Promise<void> => {
     try {
       setLoading(true);
       
-      const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/command`, {
+      console.log('🔄 Iniciando sincronización manual desde ThingSpeak...');
+      
+      // ✅ RUTA MANTENIDA
+      const response = await fetch(`${SERVER_API_URL}/api/sync/thingspeak`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          command: command,
-          user_id: userId,
-          device_id: deviceAssignment.device_id || 'default' // Fallback a 'default'
+          results: 50,
+          user_id: userId
         }),
       });
+
+      if (!response.ok) {
+        throw new Error(`Error del servidor: ${response.status}`);
+      }
 
       const result = await response.json();
 
       if (result.success) {
-        Alert.alert('✅ Comando Enviado', `Comando '${command}' enviado exitosamente`);
-        
-        // Actualizar datos después de enviar comando
-        setTimeout(() => {
-          fetchPedometerData(false);
-        }, 2000);
+        Alert.alert(
+          '✅ Sincronización Exitosa', 
+          `Se procesaron ${result.processed} registros de ThingSpeak.\n\nErrores: ${result.errors || 0}`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Actualizar datos después de la sincronización
+                fetchPedometerData(false);
+                fetchSyncStats();
+              }
+            }
+          ]
+        );
       } else {
-        Alert.alert('Error', result.message || 'No se pudo enviar el comando');
+        Alert.alert('Error', result.message || 'No se pudo sincronizar con ThingSpeak');
       }
 
     } catch (error) {
-      console.error('Error enviando comando:', error);
-      Alert.alert('Error', 'Error de conexión al servidor');
+      console.error('❌ Error en sincronización manual:', error);
+      Alert.alert('Error', 'Error de conexión al servidor durante la sincronización');
     } finally {
       setLoading(false);
     }
   };
 
-  // Función para manejar la vinculación/gestión del dispositivo
-  const handleDeviceManagement = (): void => {
-    setAssignmentModalVisible(true);
-  };
-
-  // Callback cuando se asigna un dispositivo
-  const handleDeviceAssigned = (assignment: DeviceAssignment): void => {
-    // Asegurar que la asignación tiene un device_id válido
-    if (assignment && !assignment.device_id) {
-      assignment.device_id = 'default';
+  // 🆕 NUEVA FUNCIÓN: Verificar estado del sistema
+  const checkSystemStatus = async (): Promise<void> => {
+    try {
+      console.log('🔍 Verificando estado del sistema...');
+      
+      // ✅ NUEVA RUTA: Estado del sistema
+      const response = await fetch(`${SERVER_API_URL}/api/iot/pedometer/system-status`);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('📊 Estado del sistema:', result);
+        
+        // Puedes usar esta información para mostrar alertas o recomendaciones
+        if (result.recommendations && result.recommendations.length > 0) {
+         const errorRecommendations = result.recommendations.filter((r: any) => r.type === 'error');
+          if (errorRecommendations.length > 0) {
+            console.warn('⚠️ Problemas del sistema:', errorRecommendations);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error verificando estado del sistema:', error);
     }
-    
-    setDeviceAssignment(assignment);
-    setPedometerData(prevData => ({
-      ...prevData,
-      connected: true,
-      dispositivo: `ESP32 (${assignment?.device_id || 'default'})`
-    }));
   };
 
   // Función para refrescar datos
   const onRefresh = (): void => {
     setRefreshing(true);
     fetchPedometerData(false);
-    checkDeviceAssignment();
+    fetchSyncStats();
+    checkUserAssignment();
+    checkSystemStatus();
   };
 
   // Cargar datos al iniciar
   useEffect(() => {
     const initializeData = async (): Promise<void> => {
-      await getUserId();
-      await checkDeviceAssignment();
+      await getUserData();
+      await checkUserAssignment();
       fetchPedometerData();
+      fetchSyncStats();
+      checkSystemStatus();
     };
     
     initializeData();
   }, []);
 
-  // Verificar asignación periódicamente
+  // Verificar asignación cuando cambie el userId
+  useEffect(() => {
+    if (userId) {
+      checkUserAssignment();
+    }
+  }, [userId]);
+
+  // Actualizar datos periódicamente cada 60 segundos
   useEffect(() => {
     const interval = setInterval(() => {
-      checkDeviceAssignment();
-    }, 30000); // Cada 30 segundos
+      console.log('⏰ Actualizando datos automáticamente...');
+      fetchPedometerData(false);
+      fetchSyncStats();
+      // No verificar asignación tan frecuentemente para evitar spam
+    }, 60000); // Cada minuto
 
     return () => clearInterval(interval);
   }, [userId]);
@@ -305,6 +492,7 @@ const RegistroPasos = () => {
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#7A9B57" />
         <Text style={styles.loadingText}>Cargando datos del podómetro...</Text>
+        <Text style={styles.loadingSubText}>Sincronizando desde ThingSpeak</Text>
       </View>
     );
   }
@@ -314,6 +502,7 @@ const RegistroPasos = () => {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Actividad Física</Text>
+        <Text style={styles.headerUser}>Usuario: {userName}</Text>
       </View>
 
       <ScrollView 
@@ -381,81 +570,90 @@ const RegistroPasos = () => {
             </View>
           </View>
 
-          {/* Estado del dispositivo */}
-          <View style={styles.deviceCard}>
-            <View style={styles.deviceHeader}>
+          {/* Estado de asignación del usuario */}
+          <View style={styles.assignmentCard}>
+            <View style={styles.assignmentHeader}>
               <View>
-                <Text style={styles.deviceTitle}>
-                  {deviceAssignment ? 'Podómetro Asignado' : 'Gestionar Podómetro'}
+                <Text style={styles.assignmentTitle}>
+                  {userAssignment ? 'Podómetro Asignado' : 'Gestionar Podómetro'}
                 </Text>
-                <Text style={styles.deviceSubtitle}>
-                  {deviceAssignment ? 
-                    `Dispositivo: ${deviceAssignment.device_id}` : 
-                    'Sin dispositivo asignado'
+                <Text style={styles.assignmentSubtitle}>
+                  {userAssignment ? 
+                    `Asignado a: ${userAssignment.user_name}` : 
+                    'Ningún usuario asignado'
                   }
                 </Text>
               </View>
               <View style={[
-                styles.statusIndicator,
-                { backgroundColor: deviceAssignment ? '#4CAF50' : '#F44336' }
+                styles.assignmentIndicator,
+                { backgroundColor: userAssignment ? '#4CAF50' : '#FF9800' }
               ]} />
             </View>
             
-            {/* Imagen del dispositivo */}
+            {/* Información del dispositivo ThingSpeak */}
             <View style={styles.deviceImageContainer}>
               <View style={styles.deviceImage}>
                 <Text style={styles.deviceDisplay}>
                   {pedometerData.pasos.toLocaleString()}
                 </Text>
                 <Text style={styles.deviceDisplayLabel}>STEPS</Text>
-                <Text style={styles.deviceIcon}>🚶‍♂️</Text>
+                <Text style={styles.deviceIcon}>📶</Text>
               </View>
             </View>
             
             {/* Info del estado */}
-            <View style={styles.deviceStatus}>
+            <View style={styles.assignmentStatus}>
               <Text style={styles.statusText}>
-                Estado: {deviceAssignment ? 
-                  (pedometerData.connected ? 'Conectado y Activo' : 'Asignado') : 
+                Estado: {userAssignment ? 
+                  (pedometerData.connected ? 'Datos Recibidos' : 'Esperando Datos') : 
                   'Sin Asignar'
                 }
               </Text>
               
               {pedometerData.lastUpdate && (
                 <Text style={styles.lastUpdate}>
-                  {/* Última actualización: {pedometerData.lastUpdate} */}
+                  Última actualización: {pedometerData.lastUpdate}
                 </Text>
               )}
 
-              {deviceAssignment && (
+              {userAssignment && (
                 <Text style={styles.assignmentInfo}>
-                  Asignado: {new Date(deviceAssignment.assigned_at).toLocaleString('es-ES')}
+                  Asignado: {new Date(userAssignment.assigned_at).toLocaleString('es-ES')}
                 </Text>
               )}
+
+             
             </View>
             
             {/* Botón de gestión */}
             <TouchableOpacity
               style={[
-                styles.connectButton,
-                deviceAssignment ? styles.manageButton : styles.assignButton
+                styles.assignmentButton,
+                userAssignment ? styles.releaseButton : styles.assignButton
               ]}
-              onPress={handleDeviceManagement}
+              onPress={userAssignment ? releaseUserAssignment : assignUserToPedometer}
+              disabled={loading}
             >
-              <Icon3 
-                name={deviceAssignment ? "settings" : "link"} 
-                size={16} 
-                color="#FFFFFF" 
-                style={{ marginRight: 8 }} 
-              />
-              <Text style={styles.connectButtonText}>
-                {deviceAssignment ? 'Gestionar Dispositivo' : 'Asignar Podómetro'}
-              </Text>
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Icon3 
+                    name={userAssignment ? "unlink" : "link"} 
+                    size={16} 
+                    color="#FFFFFF" 
+                    style={{ marginRight: 8 }} 
+                  />
+                  <Text style={styles.assignmentButtonText}>
+                    {userAssignment ? 'Liberar Podómetro' : 'Asignar Podómetro'}
+                  </Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
 
-
-
+          
+          
           {/* Botones de acción */}
           <View style={styles.actionButtons}>
             <TouchableOpacity
@@ -472,28 +670,25 @@ const RegistroPasos = () => {
             </TouchableOpacity>
             
             <TouchableOpacity
-              style={[styles.actionButton, styles.secondaryButton]}
-              onPress={() => {
-                checkDeviceAssignment();
-                fetchPedometerData(false);
-              }}
+              style={[styles.actionButton, styles.syncButton]}
+              onPress={forceSyncFromThingSpeak}
+              disabled={loading}
             >
-              <Icon3 name="sync-outline" size={18} color="#666" />
-              <Text style={[styles.actionButtonText, { color: '#666' }]}>Sincronizar</Text>
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Icon3 name="cloud-download-outline" size={18} color="#FFFFFF" />
+              )}
+              <Text style={styles.actionButtonText}>Sincronizar</Text>
             </TouchableOpacity>
           </View>
+
+         
 
           {/* Espacio para el navbar */}
           <View style={styles.navbarSpace} />
         </View>
       </ScrollView>
-
-      {/* Modal de asignación de podómetro */}
-      <PedometerAssignmentModal
-        visible={assignmentModalVisible}
-        onClose={() => setAssignmentModalVisible(false)}
-        onAssigned={handleDeviceAssigned}
-      />
 
       {/* Bottom Navigation */}
       <BottomNavbar activeTab="steps" />
@@ -517,6 +712,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
   },
+  loadingSubText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#999',
+  },
   header: {
     backgroundColor: '#7A9B57',
     paddingTop: 50,
@@ -528,6 +728,16 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#FFFFFF',
+  },
+  headerSubTitle: {
+    fontSize: 12,
+    color: '#E8F5E8',
+    marginTop: 4,
+  },
+  headerUser: {
+    fontSize: 11,
+    color: '#D4E6C7',
+    marginTop: 2,
   },
   scrollContainer: {
     flex: 1,
@@ -615,31 +825,31 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 8,
   },
-  deviceCard: {
-    backgroundColor: '#FFF8DC',
+  assignmentCard: {
+    backgroundColor: '#E8F4FD',
     borderWidth: 2,
-    borderColor: '#F0E68C',
+    borderColor: '#2196F3',
     borderRadius: 12,
     padding: 20,
     marginBottom: 20,
   },
-  deviceHeader: {
+  assignmentHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 20,
   },
-  deviceTitle: {
+  assignmentTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
   },
-  deviceSubtitle: {
+  assignmentSubtitle: {
     fontSize: 14,
     color: '#666',
     marginTop: 2,
   },
-  statusIndicator: {
+  assignmentIndicator: {
     width: 12,
     height: 12,
     borderRadius: 6,
@@ -651,12 +861,12 @@ const styles = StyleSheet.create({
   deviceImage: {
     width: 100,
     height: 140,
-    backgroundColor: '#E8E8E8',
+    backgroundColor: '#F0F8FF',
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#DDD',
+    borderWidth: 2,
+    borderColor: '#2196F3',
   },
   deviceDisplay: {
     fontSize: 16,
@@ -672,7 +882,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     marginTop: 8,
   },
-  deviceStatus: {
+  assignmentStatus: {
     alignItems: 'center',
     marginBottom: 15,
   },
@@ -690,8 +900,14 @@ const styles = StyleSheet.create({
   assignmentInfo: {
     fontSize: 11,
     color: '#999',
+    marginBottom: 3,
   },
-  connectButton: {
+  syncInfo: {
+    fontSize: 11,
+    color: '#2196F3',
+    marginTop: 5,
+  },
+  assignmentButton: {
     borderRadius: 25,
     paddingVertical: 12,
     paddingHorizontal: 24,
@@ -703,83 +919,98 @@ const styles = StyleSheet.create({
   assignButton: {
     backgroundColor: '#7A9B57',
   },
-  manageButton: {
-    backgroundColor: '#2196F3',
+  releaseButton: {
+    backgroundColor: '#F44336',
   },
-  connectButtonText: {
+  assignmentButtonText: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
   },
-  controlsCard: {
-    backgroundColor: '#FFFFFF',
+  syncStatsCard: {
+    backgroundColor: '#FFF9E6',
     borderRadius: 12,
-    padding: 20,
+    padding: 15,
     marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FFC107',
   },
-  controlsTitle: {
-    fontSize: 16,
+  syncStatsTitle: {
+    fontSize: 14,
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 15,
     textAlign: 'center',
   },
-  controlButtons: {
+  syncStatsGrid: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    gap: 10,
+    marginBottom: 10,
   },
-  controlButton: {
-    flex: 1,
-    flexDirection: 'row',
+  syncStatItem: {
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    gap: 6,
   },
-  startButton: {
-    backgroundColor: '#4CAF50',
-  },
-  pauseButton: {
-    backgroundColor: '#FF9800',
-  },
-  resetButton: {
-    backgroundColor: '#F44336',
-  },
-  controlButtonText: {
-    color: '#FFFFFF',
-    fontSize: 12,
+  syncStatNumber: {
+    fontSize: 18,
     fontWeight: 'bold',
+    color: '#FF8F00',
+  },
+  syncStatLabel: {
+    fontSize: 10,
+    color: '#666',
+    marginTop: 2,
+  },
+  syncLastUpdate: {
+    fontSize: 11,
+    color: '#FF8F00',
+    textAlign: 'center',
+    marginTop: 5,
   },
   actionButtons: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 15,
+    gap: 10,
     marginBottom: 20,
   },
   actionButton: {
     backgroundColor: '#7A9B57',
     borderRadius: 8,
     paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  syncButton: {
+    backgroundColor: '#2196F3',
   },
   secondaryButton: {
     backgroundColor: '#E0E0E0',
   },
   actionButtonText: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
+  },
+  infoCard: {
+    backgroundColor: '#E8F5E8',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 20,
+  },
+  infoTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#2E7D32',
+    marginBottom: 8,
+  },
+  infoText: {
+    fontSize: 12,
+    color: '#2E7D32',
+    lineHeight: 18,
+    marginBottom: 4,
   },
   navbarSpace: {
     height: 20,

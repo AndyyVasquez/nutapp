@@ -223,27 +223,29 @@ const handleMercadoPagoPayment = async () => {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.title}>Profesional de la Salud</Text>
+         <View style={styles.header}>
+           <Text style={styles.title}>Profesional de la Salud</Text>
+         </View>
           <View style={styles.formCard}>
             <Text style={styles.formTitle}>Formulario de Solicitud</Text>
 
             <Text style={styles.fieldLabel}>Motivo *</Text>
-            <TextInput style={styles.textInput} value={motivo} onChangeText={setMotivo} multiline />
+            <TextInput style={styles.textInput} value={motivo} placeholder='Describe tu motivo...' placeholderTextColor={"#666"} onChangeText={setMotivo} multiline />
 
             <Text style={styles.fieldLabel}>Antecedentes heredofamiliares *</Text>
-            <TextInput style={styles.textInput} value={antecedentesHered} onChangeText={setAntecedentesHered} multiline />
+            <TextInput style={styles.textInput} value={antecedentesHered} placeholder='Enfermedades dentro de tu familia...' placeholderTextColor={"#666"} onChangeText={setAntecedentesHered} multiline />
 
             <Text style={styles.fieldLabel}>Antecedentes personales no patológicos *</Text>
-            <TextInput style={styles.textInput} value={antecedentesPersonales} onChangeText={setAntecedentesPersonales} multiline />
+            <TextInput style={styles.textInput} value={antecedentesPersonales} placeholder='Estilo de vida, ocupación, hábitos...' placeholderTextColor={"#666"} onChangeText={setAntecedentesPersonales} multiline />
 
             <Text style={styles.fieldLabel}>Antecedentes personales patológicos *</Text>
-            <TextInput style={styles.textInput} value={antecedentesPatologicos} onChangeText={setAntecedentesPatologicos} multiline />
+            <TextInput style={styles.textInput} value={antecedentesPatologicos} placeholder='Enfermedades, cirugías, hospitalizaciones...' placeholderTextColor={"#666"} onChangeText={setAntecedentesPatologicos} multiline />
 
             <Text style={styles.fieldLabel}>Alergias e intolerancias *</Text>
-            <TextInput style={styles.textInput} value={alergias} onChangeText={setAlergias} multiline />
+            <TextInput style={styles.textInput} value={alergias} placeholder='Describe tus alergias...' placeholderTextColor={"#666"} onChangeText={setAlergias} multiline />
 
             <Text style={styles.fieldLabel}>Aversiones alimentarias *</Text>
-            <TextInput style={styles.textInput} value={aversiones} onChangeText={setAversiones} multiline />
+            <TextInput style={styles.textInput} value={aversiones} placeholder='Alimentos que no toleras o no son de tu gusto...' placeholderTextColor={"#666"} onChangeText={setAversiones} multiline />
 
             <Text style={styles.requiredNote}>* Campos obligatorios</Text>
 
@@ -271,6 +273,14 @@ const styles = StyleSheet.create({
     flex: 1, 
     backgroundColor: '#F5F5F5' 
   },
+  header: {
+     backgroundColor: "#7A9B57" ,
+      paddingVertical: 10,
+      marginBottom: 10,
+      marginTop: -30,
+      marginRight: -20,
+      marginLeft: -20,
+  },
   keyboardContainer: { 
     flex: 1 
   },
@@ -287,12 +297,17 @@ const styles = StyleSheet.create({
     fontWeight: 'bold', 
     color: '#333', 
     marginBottom: 30, 
-    textAlign: 'center' 
+    textAlign: 'center'
   },
   formCard: { 
     backgroundColor: '#F5F5DC', 
     borderRadius: 12, 
-    padding: 20 
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5
   },
   formTitle: { 
     fontSize: 18, 
